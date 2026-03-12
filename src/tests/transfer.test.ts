@@ -10,7 +10,7 @@
 
 import 'dotenv/config';
 import { eq, sql } from 'drizzle-orm';
-import { dbDirect, db } from '../db/pool.js';
+import { dbDirect } from '../db/pool.js';
 import { agents, transactions } from '../db/schema/index.js';
 import { transferShells, systemCredit } from '../lib/transfer.js';
 
@@ -64,8 +64,8 @@ async function test1_sufficientBalance() {
     memo: 'Test transfer',
   });
 
-  const [agentA] = await db.select({ balance: agents.balancePoints }).from(agents).where(eq(agents.id, TEST_AGENT_A));
-  const [agentB] = await db.select({ balance: agents.balancePoints }).from(agents).where(eq(agents.id, TEST_AGENT_B));
+  const [agentA] = await dbDirect.select({ balance: agents.balancePoints }).from(agents).where(eq(agents.id, TEST_AGENT_A));
+  const [agentB] = await dbDirect.select({ balance: agents.balancePoints }).from(agents).where(eq(agents.id, TEST_AGENT_B));
 
   const aBalance = parseFloat(agentA.balance ?? '0');
   const bBalance = parseFloat(agentB.balance ?? '0');
@@ -103,7 +103,7 @@ async function test2_insufficientBalance() {
   }
 
   // Verify balances unchanged
-  const [agentA] = await db.select({ balance: agents.balancePoints }).from(agents).where(eq(agents.id, TEST_AGENT_A));
+  const [agentA] = await dbDirect.select({ balance: agents.balancePoints }).from(agents).where(eq(agents.id, TEST_AGENT_A));
   const aBalance = parseFloat(agentA.balance ?? '0');
   if (Math.abs(aBalance - 200) > 0.01) throw new Error(`Agent A balance should be 200 unchanged, got ${aBalance}`);
   console.log(`  ✅ Balances unchanged: A=${aBalance}`);
@@ -144,7 +144,7 @@ async function test3_concurrentTransfers() {
   }
 
   // Verify final balance is 0 (200 - 4×50 = 0)
-  const [agentA] = await db.select({ balance: agents.balancePoints }).from(agents).where(eq(agents.id, TEST_AGENT_A));
+  const [agentA] = await dbDirect.select({ balance: agents.balancePoints }).from(agents).where(eq(agents.id, TEST_AGENT_A));
   const aBalance = parseFloat(agentA.balance ?? '0');
 
   if (succeeded !== 4) throw new Error(`Expected exactly 4 successes, got ${succeeded}`);
@@ -166,7 +166,7 @@ async function test4_systemCredit() {
     memo: 'Daily emission test',
   });
 
-  const [agentA] = await db.select({ balance: agents.balancePoints }).from(agents).where(eq(agents.id, TEST_AGENT_A));
+  const [agentA] = await dbDirect.select({ balance: agents.balancePoints }).from(agents).where(eq(agents.id, TEST_AGENT_A));
   const aBalance = parseFloat(agentA.balance ?? '0');
 
   if (Math.abs(aBalance - 20) > 0.01) throw new Error(`Agent A should have 20 after emission, got ${aBalance}`);

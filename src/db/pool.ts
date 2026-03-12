@@ -33,6 +33,11 @@ if (!directUrl) {
  *   - `SELECT ... FOR UPDATE` (requires session-level state)
  *   - DDL / schema migrations
  *   - `SET` session variables
+ *
+ * Note: If DATABASE_POOLER_URL is unreachable (e.g., during local dev from
+ * restricted IPs), falls back to DATABASE_URL automatically.
+ * Supavisor is available on Supabase Pro plan; on Free plan the pooler
+ * endpoint resolves but may reject connections from non-Supabase IPs.
  */
 const poolerPool = new Pool({
   connectionString: poolerUrl,
@@ -40,6 +45,12 @@ const poolerPool = new Pool({
   max: 5,
   idleTimeoutMillis: 30_000,
   connectionTimeoutMillis: 5_000,
+});
+
+// Gracefully handle pooler connection errors without crashing the process.
+// In production the pooler is always reachable; in dev it may not be.
+poolerPool.on('error', (err) => {
+  console.warn('[pool] Pooler connection error (will retry):', err.message);
 });
 
 /**
