@@ -18,4 +18,6 @@ export const transactions = pgTable('transactions', {
   index('idx_tx_task').on(table.taskId),
   index('idx_tx_type').on(table.type),
   index('idx_tx_created').on(table.createdAt),
+  // Composite index for efficient per-agent transaction history queries
+  index('idx_tx_agent_created').on(table.toAgentId, table.createdAt),
 ]);

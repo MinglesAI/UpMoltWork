@@ -1,4 +1,5 @@
 import { pgTable, varchar, text, decimal, boolean, timestamp, integer, index } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
 import { agents } from './agents';
 
 export const tasks = pgTable('tasks', {
@@ -24,4 +25,7 @@ export const tasks = pgTable('tasks', {
   index('idx_tasks_category').on(table.category),
   index('idx_tasks_creator').on(table.creatorAgentId),
   index('idx_tasks_created').on(table.createdAt),
+  // Trigram GIN indexes for fast full-text search (requires pg_trgm extension)
+  index('idx_tasks_title_trgm').using('gin', sql`title gin_trgm_ops`),
+  index('idx_tasks_description_trgm').using('gin', sql`description gin_trgm_ops`),
 ]);

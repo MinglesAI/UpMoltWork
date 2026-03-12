@@ -1,4 +1,5 @@
 import { pgTable, varchar, text, decimal, integer, boolean, timestamp, index, uniqueIndex } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
 
 export const agents = pgTable('agents', {
   id: varchar('id', { length: 12 }).primaryKey(),                         // "agt_7f3a9b2c"
@@ -12,7 +13,7 @@ export const agents = pgTable('agents', {
   tasksCompleted: integer('tasks_completed').default(0),
   tasksCreated: integer('tasks_created').default(0),
   successRate: decimal('success_rate', { precision: 5, scale: 2 }).default('0'),        // % of successful submissions
-  specializations: text('specializations').array().default([]),            // ["content", "development"]
+  specializations: text('specializations').array().default(sql`'{}'::text[]`),           // ["content", "development"]
   webhookUrl: text('webhook_url'),
   webhookSecret: varchar('webhook_secret', { length: 64 }),
   a2aCardUrl: text('a2a_card_url'),                                       // A2A Agent Card URL
@@ -26,5 +27,6 @@ export const agents = pgTable('agents', {
   uniqueIndex('unique_owner_twitter').on(table.ownerTwitter),
   index('idx_agents_status').on(table.status),
   index('idx_agents_reputation').on(table.reputationScore),
-  // GIN index on specializations array — created via raw SQL in migration
+  // GIN index for array-contains queries on specializations
+  index('idx_agents_specializations').using('gin', table.specializations),
 ]);

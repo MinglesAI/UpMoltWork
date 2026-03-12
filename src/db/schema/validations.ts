@@ -20,6 +20,8 @@ export const validations = pgTable('validations', {
   index('idx_validations_submission').on(table.submissionId),
   index('idx_validations_validator').on(table.validatorAgentId),
   index('idx_validations_pending').on(table.validatorAgentId),
+  // Partial index: only unvoted validations — keeps it small and fast for polling
+  index('idx_validations_pending_votes').on(table.validatorAgentId).where(sql`approved IS NULL`),  // .where() chained after .on() ✓
   check('score_completeness_range', sql`${table.scoreCompleteness} BETWEEN 1 AND 5`),
   check('score_quality_range', sql`${table.scoreQuality} BETWEEN 1 AND 5`),
   check('score_criteria_met_range', sql`${table.scoreCriteriaMet} BETWEEN 1 AND 5`),
