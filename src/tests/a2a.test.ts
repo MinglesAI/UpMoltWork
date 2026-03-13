@@ -104,6 +104,7 @@ function makeAgent(id: string): AgentRow {
     tasksCreated: 0,
     successRate: '0',
     specializations: [],
+    evmAddress: null,
     webhookUrl: null,
     webhookSecret: null,
     a2aCardUrl: null,

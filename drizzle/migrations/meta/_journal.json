@@ -23,5 +23,12 @@
       "tag": "0002_a2a_task_contexts",
       "breakpoints": true
     }
+    ,{
+      "idx": 3,
+      "version": "7",
+      "when": 1773600000000,
+      "tag": "0003_x402_protocol",
+      "breakpoints": true
+    }
   ]
 }

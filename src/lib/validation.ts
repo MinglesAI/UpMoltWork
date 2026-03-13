@@ -2,6 +2,7 @@ import { eq, and, sql, isNotNull } from 'drizzle-orm';
 import { db } from '../db/pool.js';
 import { agents, validations, submissions, tasks, a2aTaskContexts } from '../db/schema/index.js';
 import { releaseEscrowToExecutor, refundEscrow, systemCredit } from './transfer.js';
+import { transferUsdc } from './usdc-transfer.js';
 import { generateValidationId } from './ids.js';
 import { fireWebhook } from './webhooks.js';
 import { updateReputation, REPUTATION } from './reputation.js';
@@ -103,14 +104,52 @@ async function applyApproval(submissionId: string): Promise<void> {
   if (!sub || sub.status !== 'validating') return;
   const [t] = await db.select().from(tasks).where(eq(tasks.id, sub.taskId)).limit(1);
   if (!t) return;
-  const price = parseFloat(t.pricePoints ?? '0');
+
   await db.update(submissions).set({ status: 'approved' }).where(eq(submissions.id, submissionId));
   await db.update(tasks).set({ status: 'completed', updatedAt: new Date() }).where(eq(tasks.id, sub.taskId));
-  await releaseEscrowToExecutor({
-    taskId: sub.taskId,
-    executorAgentId: sub.agentId,
-    totalAmount: price,
-  });
+
+  if (t.paymentMode === 'usdc') {
+    // USDC payout: transfer from platform wallet to executor's evm_address
+    const [executor] = await db.select({ evmAddress: agents.evmAddress })
+      .from(agents)
+      .where(eq(agents.id, sub.agentId))
+      .limit(1);
+
+    if (!executor?.evmAddress) {
+      // Executor has no EVM address — hold funds, send webhook warning
+      console.warn(`[validation] Executor ${sub.agentId} has no evm_address — USDC payout held for task ${sub.taskId}`);
+      fireWebhook(sub.agentId, 'payment.held', {
+        task_id: sub.taskId,
+        submission_id: submissionId,
+        reason: 'no_evm_address',
+        message: 'Set evm_address via PATCH /v1/agents/me to receive USDC payout',
+      });
+    } else {
+      const priceUsdc = parseFloat(t.priceUsdc ?? '0');
+      try {
+        await transferUsdc({
+          to: executor.evmAddress as `0x${string}`,
+          amountUsdc: priceUsdc,
+          taskId: sub.taskId,
+        });
+      } catch (err) {
+        console.error(`[validation] USDC transfer failed for task ${sub.taskId}:`, err);
+        fireWebhook(sub.agentId, 'payment.failed', {
+          task_id: sub.taskId,
+          submission_id: submissionId,
+          error: err instanceof Error ? err.message : 'Unknown error',
+        });
+      }
+    }
+  } else {
+    // Points payout (default)
+    const price = parseFloat(t.pricePoints ?? '0');
+    await releaseEscrowToExecutor({
+      taskId: sub.taskId,
+      executorAgentId: sub.agentId,
+      totalAmount: price,
+    });
+  }
   await db.update(agents).set({
     tasksCompleted: sql`tasks_completed + 1`,
     updatedAt: sql`NOW()`,

@@ -17,6 +17,7 @@ export const agents = pgTable('agents', {
   webhookUrl: text('webhook_url'),
   webhookSecret: varchar('webhook_secret', { length: 64 }),
   a2aCardUrl: text('a2a_card_url'),                                       // A2A Agent Card URL
+  evmAddress: varchar('evm_address', { length: 42 }),                     // EVM wallet address for USDC payouts
   apiKeyHash: varchar('api_key_hash', { length: 128 }).notNull(),         // bcrypt hash of API key
   lastApiCallAt: timestamp('last_api_call_at', { withTimezone: true }),   // For emission eligibility
   verifiedAt: timestamp('verified_at', { withTimezone: true }),

@@ -143,6 +143,7 @@ agentsRouter.get('/me', authMiddleware, rateLimitMiddleware, async (c) => {
     tasks_completed: agent.tasksCompleted ?? 0,
     tasks_created: agent.tasksCreated ?? 0,
     success_rate: parseFloat(agent.successRate ?? '0'),
+    evm_address: agent.evmAddress ?? null,
     specializations: agent.specializations ?? [],
     webhook_url: agent.webhookUrl,
     webhook_secret: agent.webhookSecret ? `${agent.webhookSecret.slice(0, 8)}...` : null,
@@ -179,6 +180,18 @@ agentsRouter.patch('/me', authMiddleware, rateLimitMiddleware, async (c) => {
   if (typeof b.a2a_agent_card_url === 'string')
     updates.a2aCardUrl = b.a2a_agent_card_url.trim() || null;
 
+  // x402: EVM wallet address for USDC payouts
+  if (typeof b.evm_address === 'string') {
+    const addr = b.evm_address.trim();
+    if (addr && !/^0x[a-fA-F0-9]{40}$/.test(addr)) {
+      return c.json(
+        { error: 'invalid_request', message: 'evm_address must be a valid EVM address (0x + 40 hex chars)' },
+        400,
+      );
+    }
+    updates.evmAddress = addr || null;
+  }
+
   if (Object.keys(updates).length === 0) {
     return c.json({ error: 'invalid_request', message: 'No valid fields to update' }, 400);
   }
@@ -196,6 +209,7 @@ agentsRouter.patch('/me', authMiddleware, rateLimitMiddleware, async (c) => {
     owner_twitter: updated!.ownerTwitter,
     status: updated!.status,
     balance_points: parseFloat(updated!.balancePoints ?? '0'),
+    evm_address: updated!.evmAddress ?? null,
     specializations: updated!.specializations ?? [],
     webhook_url: updated!.webhookUrl,
     a2a_card_url: updated!.a2aCardUrl,

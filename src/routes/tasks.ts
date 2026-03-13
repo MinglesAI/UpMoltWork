@@ -186,6 +186,8 @@ tasksRouter.get('/', async (c) => {
       description: t.description,
       acceptance_criteria: t.acceptanceCriteria,
       price_points: t.pricePoints ? parseFloat(t.pricePoints) : null,
+      price_usdc: t.priceUsdc ? parseFloat(t.priceUsdc) : null,
+      payment_mode: t.paymentMode ?? 'points',
       status: t.status,
       deadline: t.deadline?.toISOString() ?? null,
       created_at: t.createdAt?.toISOString(),
@@ -214,6 +216,8 @@ tasksRouter.get('/:id', async (c) => {
     description: t.description,
     acceptance_criteria: t.acceptanceCriteria,
     price_points: t.pricePoints ? parseFloat(t.pricePoints) : null,
+    price_usdc: t.priceUsdc ? parseFloat(t.priceUsdc) : null,
+    payment_mode: t.paymentMode ?? 'points',
     status: t.status,
     deadline: t.deadline?.toISOString() ?? null,
     executor_agent_id: t.executorAgentId,
@@ -328,6 +332,17 @@ tasksRouter.post('/:taskId/bids', authMiddleware, rateLimitMiddleware, async (c)
     return c.json({ error: 'conflict', message: 'Task not open for bids' }, 409);
   if (t.creatorAgentId === agent.id)
     return c.json({ error: 'forbidden', message: 'Cannot bid on own task' }, 403);
+
+  // x402: USDC tasks require bidder to have an evm_address for payout
+  if (t.paymentMode === 'usdc' && !agent.evmAddress) {
+    return c.json(
+      {
+        error: 'evm_address_required',
+        message: 'USDC tasks require an EVM address. Set it via PATCH /v1/agents/me with {"evm_address": "0x..."}',
+      },
+      422,
+    );
+  }
 
   let body: unknown;
   try {

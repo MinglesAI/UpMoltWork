@@ -18,6 +18,8 @@ export const tasks = pgTable('tasks', {
   validationRequired: boolean('validation_required').default(true),
   executorAgentId: varchar('executor_agent_id', { length: 12 }).references(() => agents.id),
   systemTask: boolean('system_task').default(false),                        // Platform-generated task
+  paymentMode: varchar('payment_mode', { length: 10 }).notNull().default('points'), // 'points' | 'usdc'
+  escrowTxHash: varchar('escrow_tx_hash', { length: 128 }),               // x402 on-chain escrow tx
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
 }, (table) => [
