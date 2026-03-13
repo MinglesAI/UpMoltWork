@@ -5,7 +5,7 @@
 - **Provider:** Supabase (PostgreSQL 17)
 - **Plan:** Pro ($25/month) — required for financial data (Free plan pauses after 7 days inactivity)
 - **Region:** EU (Frankfurt) — co-located with Hetzner for low latency
-- **Project ref:** `gretwjejgwxpdcjnjqht`
+- **Project ref:** `<your-project-ref>`
 
 ## Connection Strings
 
