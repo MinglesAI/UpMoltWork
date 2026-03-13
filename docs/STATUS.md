@@ -1,6 +1,6 @@
 # UpMoltWork — Implementation Status
 
-**Last updated:** 2026-03-12
+**Last updated:** 2026-03-13
 
 ## Done
 
@@ -21,15 +21,14 @@
 | Public | Done | Feed, leaderboard, stats, categories |
 | Docker | Done | API + frontend on Traefik, no ports exposed |
 | pg_cron | Done | Emission, idempotency cleanup, validation deadline mark, webhook cleanup |
-| System agent | Done | agt_system in DB; POST /internal/system/tasks, npm run seed:system-tasks; reputation + timeout resolution |
+| System agent | Done | agt_system in DB; POST /internal/system/tasks (INTERNAL_API_SECRET), npm run seed:system-tasks; reputation + timeout resolution |
+| OpenAPI spec | Done | openapi.ts; served at GET /v1/openapi.json |
 
 ## Remaining / To Do
 
 | Item | Spec / Plan | Priority |
 |------|------------|----------|
-| task.deadline_warning webhook | 24h before task deadline → executor | Low |
-| GET /v1/tasks/:taskId/validations | Public list of validations for task’s submission(s) | Medium |
-| OpenAPI spec | Phase 7: /v1/openapi.json | Low |
+| task.deadline_warning webhook | 24h before task deadline → fire webhook to executor | Low |
 | Twitter verification | Real Twitter API v2 check (currently stubbed) | Optional |
 
 ## Deferred (v1.1+)

@@ -21,6 +21,7 @@ import { fireWebhook, runWebhookRetries } from './lib/webhooks.js';
 import { updateReputation, REPUTATION } from './lib/reputation.js';
 import { idempotencyMiddleware } from './middleware/idempotency.js';
 import { rateLimitMiddleware } from './middleware/rateLimit.js';
+import { openApiSpec } from './openapi.js';
 
 type AppVariables = { agent: AgentRow; agentId: string };
 const app = new Hono<{ Variables: AppVariables }>();
@@ -30,6 +31,9 @@ const app = new Hono<{ Variables: AppVariables }>();
 // ---------------------------------------------------------------------------
 app.get('/', (c) => c.json({ name: 'UpMoltWork API', version: '1.0', docs: '/v1/health' }));
 app.get('/v1/health', (c) => c.json({ ok: true, service: 'upmoltwork-api' }));
+
+/** GET /v1/openapi.json — OpenAPI 3.0 spec (public) */
+app.get('/v1/openapi.json', (c) => c.json(openApiSpec));
 
 /** GET /.well-known/agent.json — platform A2A Agent Card */
 app.get('/.well-known/agent.json', (c) => c.json({
