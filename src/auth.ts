@@ -1,10 +1,12 @@
 import type { Context, Next } from 'hono';
 import { eq, sql } from 'drizzle-orm';
 import bcrypt from 'bcrypt';
+import { SignJWT, jwtVerify } from 'jose';
 import { db } from './db/pool.js';
 import { agents, type AgentRow } from './db/schema/index.js';
 
 type AppVariables = { agent: AgentRow; agentId: string };
+type ViewVariables = { viewAgentId: string };
 
 const API_KEY_PREFIX = 'axe_';
 const AGENT_ID_LENGTH = 12;  // e.g. agt_7f3a9b2c
@@ -58,6 +60,84 @@ export async function authMiddleware(c: Context<{ Variables: AppVariables }>, ne
 
   // Update last_api_call_at for emission eligibility (fire-and-forget)
   db.execute(sql`UPDATE agents SET last_api_call_at = NOW() WHERE id = ${agentId}`).catch(() => {});
+
+  await next();
+}
+
+/**
+ * Get JWT secret key from environment. Throws if not configured.
+ */
+function getJwtSecret(): Uint8Array {
+  const secret = process.env.JWT_SECRET;
+  if (!secret) throw new Error('JWT_SECRET is not configured');
+  return new TextEncoder().encode(secret);
+}
+
+/**
+ * Generate a view token (JWT) for an agent.
+ * Payload: { sub: agentId, type: "view", jti: randomHex(8) }
+ * Expiry: 30 days
+ */
+export async function generateViewToken(agentId: string): Promise<string> {
+  const jti = Array.from(crypto.getRandomValues(new Uint8Array(8)))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
+
+  const secret = getJwtSecret();
+  return new SignJWT({ type: 'view', jti })
+    .setProtectedHeader({ alg: 'HS256' })
+    .setSubject(agentId)
+    .setIssuedAt()
+    .setExpirationTime('30d')
+    .sign(secret);
+}
+
+/**
+ * View token middleware: validate JWT view token from Authorization header or ?token= query param.
+ * Checks type === "view" and sub === :agentId route param.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export async function viewTokenMiddleware(c: Context<any>, next: Next) {
+  const agentId = c.req.param('agentId');
+  if (!agentId) {
+    return c.json({ error: 'invalid_request', message: 'Missing agentId param' }, 400);
+  }
+
+  // Extract token from Authorization header or query param
+  let token: string | null = null;
+  const authHeader = c.req.header('Authorization');
+  if (authHeader?.startsWith('Bearer ')) {
+    token = authHeader.slice(7).trim();
+  } else {
+    token = c.req.query('token') ?? null;
+  }
+
+  if (!token) {
+    return c.json({ error: 'unauthorized', message: 'View token required (Authorization: Bearer <token> or ?token=)' }, 401);
+  }
+
+  let secret: Uint8Array;
+  try {
+    secret = getJwtSecret();
+  } catch {
+    return c.json({ error: 'server_error', message: 'JWT not configured' }, 500);
+  }
+
+  try {
+    const { payload } = await jwtVerify(token, secret, { algorithms: ['HS256'] });
+
+    if (payload['type'] !== 'view') {
+      return c.json({ error: 'unauthorized', message: 'Invalid token type' }, 401);
+    }
+
+    if (payload.sub !== agentId) {
+      return c.json({ error: 'forbidden', message: 'Token does not match agent' }, 403);
+    }
+
+    c.set('viewAgentId', agentId);
+  } catch {
+    return c.json({ error: 'unauthorized', message: 'Invalid or expired view token' }, 401);
+  }
 
   await next();
 }

@@ -1,11 +1,11 @@
 import 'dotenv/config';
 import { Hono } from 'hono';
 import { serve } from '@hono/node-server';
-import { eq, and, ne, gt, sql, desc, inArray } from 'drizzle-orm';
+import { eq, and, ne, gt, or, sql, desc, inArray } from 'drizzle-orm';
 import bcrypt from 'bcrypt';
 import { db, initPool } from './db/pool.js';
-import { agents, verificationChallenges, tasks, bids, submissions, validations, transactions, type AgentRow } from './db/schema/index.js';
-import { authMiddleware } from './auth.js';
+import { agents, verificationChallenges, tasks, bids, submissions, validations, transactions, webhookDeliveries, type AgentRow } from './db/schema/index.js';
+import { authMiddleware, generateViewToken, viewTokenMiddleware } from './auth.js';
 import {
   generateAgentId,
   generateApiKey,
@@ -511,9 +511,12 @@ app.post('/v1/internal/system/tasks', async (c, next) => {
 /** GET /v1/tasks — list tasks (public) */
 app.get('/v1/tasks', async (c) => {
   const limit = Math.min(parseInt(c.req.query('limit') ?? '50', 10) || 50, 100);
+  const offset = Math.max(0, parseInt(c.req.query('offset') ?? '0', 10) || 0);
   const category = c.req.query('category');
   const status = c.req.query('status');
   const minPrice = c.req.query('min_price');
+  const creatorAgentId = c.req.query('creator_agent_id');
+  const executorAgentId = c.req.query('executor_agent_id');
   const conditions = [];
   if (category && TASK_CATEGORIES.includes(category)) conditions.push(eq(tasks.category, category));
   if (status) conditions.push(eq(tasks.status, status));
@@ -521,10 +524,12 @@ app.get('/v1/tasks', async (c) => {
     const n = parseFloat(minPrice);
     if (!isNaN(n)) conditions.push(gt(tasks.pricePoints, n.toString()));
   }
+  if (creatorAgentId) conditions.push(eq(tasks.creatorAgentId, creatorAgentId));
+  if (executorAgentId) conditions.push(eq(tasks.executorAgentId, executorAgentId));
   const whereClause = conditions.length ? and(...conditions) : undefined;
   const rows = whereClause
-    ? await db.select().from(tasks).where(whereClause).orderBy(desc(tasks.createdAt)).limit(limit)
-    : await db.select().from(tasks).orderBy(desc(tasks.createdAt)).limit(limit);
+    ? await db.select().from(tasks).where(whereClause).orderBy(desc(tasks.createdAt)).limit(limit).offset(offset)
+    : await db.select().from(tasks).orderBy(desc(tasks.createdAt)).limit(limit).offset(offset);
   return c.json({ tasks: rows.map(t => ({
     id: t.id,
     creator_agent_id: t.creatorAgentId,
@@ -536,7 +541,7 @@ app.get('/v1/tasks', async (c) => {
     status: t.status,
     deadline: t.deadline?.toISOString() ?? null,
     created_at: t.createdAt?.toISOString(),
-  })) });
+  })), limit, offset });
 });
 
 /** GET /v1/tasks/:id — task detail (public) */
@@ -1113,6 +1118,308 @@ app.get('/v1/points/economy', async (c) => {
     tasks_completed: Number((completedCount as { n: number })?.n ?? 0),
     total_points_supply: parseFloat(String((supply as { total: string })?.total ?? '0')),
     total_transactions: Number((txCount as { n: number })?.n ?? 0),
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Public agent tasks
+// ---------------------------------------------------------------------------
+
+/** GET /v1/agents/:id/tasks — tasks where agent is creator or executor (public) */
+app.get('/v1/agents/:id/tasks', async (c) => {
+  const id = c.req.param('id') as string;
+  const limit = Math.min(parseInt(c.req.query('limit') ?? '50', 10) || 50, 100);
+  const offset = Math.max(0, parseInt(c.req.query('offset') ?? '0', 10) || 0);
+  const role = c.req.query('role') ?? 'all'; // creator | executor | all
+  const status = c.req.query('status');
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const conditions: any[] = [];
+  if (status) conditions.push(eq(tasks.status, status));
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let roleCondition: any;
+  if (role === 'creator') {
+    roleCondition = eq(tasks.creatorAgentId, id);
+  } else if (role === 'executor') {
+    roleCondition = eq(tasks.executorAgentId, id);
+  } else {
+    roleCondition = or(eq(tasks.creatorAgentId, id), eq(tasks.executorAgentId, id));
+  }
+
+  const whereClause = conditions.length
+    ? and(roleCondition, ...conditions)
+    : roleCondition;
+
+  const rows = await db.select().from(tasks).where(whereClause).orderBy(desc(tasks.createdAt)).limit(limit).offset(offset);
+  return c.json({
+    tasks: rows.map(t => ({
+      id: t.id,
+      creator_agent_id: t.creatorAgentId,
+      executor_agent_id: t.executorAgentId,
+      category: t.category,
+      title: t.title,
+      price_points: t.pricePoints ? parseFloat(t.pricePoints) : null,
+      status: t.status,
+      deadline: t.deadline?.toISOString() ?? null,
+      created_at: t.createdAt?.toISOString(),
+    })),
+    limit,
+    offset,
+  });
+});
+
+// ---------------------------------------------------------------------------
+// View Token
+// ---------------------------------------------------------------------------
+
+/** POST /v1/agents/me/view-token — generate view token for dashboard (auth required) */
+app.post('/v1/agents/me/view-token', authMiddleware, rateLimitMiddleware, async (c) => {
+  const agent = c.get('agent') as AgentRow;
+  try {
+    const token = await generateViewToken(agent.id);
+    const exp = Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60;
+    return c.json({
+      token,
+      agent_id: agent.id,
+      expires_at: new Date(exp * 1000).toISOString(),
+      dashboard_url: `/dashboard/${agent.id}?token=${token}`,
+    });
+  } catch {
+    return c.json({ error: 'server_error', message: 'JWT_SECRET not configured' }, 500);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Dashboard endpoints (viewTokenMiddleware)
+// ---------------------------------------------------------------------------
+
+/** GET /v1/dashboard/:agentId — overview */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+app.get('/v1/dashboard/:agentId', viewTokenMiddleware as any, async (c) => {
+  const agentId = c.req.param('agentId') as string;
+
+  const [agent] = await db.select().from(agents).where(eq(agents.id, agentId)).limit(1);
+  if (!agent) return c.json({ error: 'not_found', message: 'Agent not found' }, 404);
+
+  const recentTasks = await db.select({
+    id: tasks.id,
+    title: tasks.title,
+    category: tasks.category,
+    status: tasks.status,
+    price_points: tasks.pricePoints,
+    creator_agent_id: tasks.creatorAgentId,
+    executor_agent_id: tasks.executorAgentId,
+    created_at: tasks.createdAt,
+  }).from(tasks)
+    .where(or(eq(tasks.creatorAgentId, agentId), eq(tasks.executorAgentId, agentId))!)
+    .orderBy(desc(tasks.createdAt))
+    .limit(5);
+
+  const recentTxs = await db.select().from(transactions)
+    .where(or(eq(transactions.fromAgentId, agentId), eq(transactions.toAgentId, agentId))!)
+    .orderBy(desc(transactions.createdAt))
+    .limit(5);
+
+  return c.json({
+    agent: {
+      id: agent.id,
+      name: agent.name,
+      description: agent.description,
+      status: agent.status,
+      balance_points: parseFloat(agent.balancePoints ?? '0'),
+      balance_usdc: parseFloat(agent.balanceUsdc ?? '0'),
+      reputation_score: parseFloat(agent.reputationScore ?? '0'),
+      tasks_completed: agent.tasksCompleted ?? 0,
+      tasks_created: agent.tasksCreated ?? 0,
+      success_rate: parseFloat(agent.successRate ?? '0'),
+      specializations: agent.specializations ?? [],
+      verified_at: agent.verifiedAt?.toISOString() ?? null,
+    },
+    recent_tasks: recentTasks.map(t => ({
+      id: t.id,
+      title: t.title,
+      category: t.category,
+      status: t.status,
+      price_points: t.price_points ? parseFloat(t.price_points) : null,
+      creator_agent_id: t.creator_agent_id,
+      executor_agent_id: t.executor_agent_id,
+      created_at: (t.created_at as Date | null)?.toISOString() ?? null,
+    })),
+    recent_transactions: recentTxs.map(tx => ({
+      id: String(tx.id),
+      from_agent_id: tx.fromAgentId,
+      to_agent_id: tx.toAgentId,
+      amount: parseFloat(tx.amount),
+      currency: tx.currency,
+      type: tx.type,
+      task_id: tx.taskId,
+      memo: tx.memo,
+      created_at: tx.createdAt?.toISOString(),
+    })),
+  });
+});
+
+/** GET /v1/dashboard/:agentId/tasks */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+app.get('/v1/dashboard/:agentId/tasks', viewTokenMiddleware as any, async (c) => {
+  const agentId = c.req.param('agentId') as string;
+  const limit = Math.min(parseInt(c.req.query('limit') ?? '50', 10) || 50, 100);
+  const offset = Math.max(0, parseInt(c.req.query('offset') ?? '0', 10) || 0);
+  const role = c.req.query('role') ?? 'all'; // creator | executor | all
+  const status = c.req.query('status');
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const conditions: any[] = [];
+  if (status) conditions.push(eq(tasks.status, status));
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let roleCondition: any;
+  if (role === 'creator') {
+    roleCondition = eq(tasks.creatorAgentId, agentId);
+  } else if (role === 'executor') {
+    roleCondition = eq(tasks.executorAgentId, agentId);
+  } else {
+    roleCondition = or(eq(tasks.creatorAgentId, agentId), eq(tasks.executorAgentId, agentId));
+  }
+
+  const whereClause = conditions.length ? and(roleCondition, ...conditions) : roleCondition;
+  const rows = await db.select().from(tasks).where(whereClause).orderBy(desc(tasks.createdAt)).limit(limit).offset(offset);
+
+  return c.json({
+    tasks: rows.map(t => ({
+      id: t.id,
+      creator_agent_id: t.creatorAgentId,
+      executor_agent_id: t.executorAgentId,
+      category: t.category,
+      title: t.title,
+      description: t.description,
+      price_points: t.pricePoints ? parseFloat(t.pricePoints) : null,
+      status: t.status,
+      deadline: t.deadline?.toISOString() ?? null,
+      created_at: t.createdAt?.toISOString(),
+    })),
+    limit,
+    offset,
+  });
+});
+
+/** GET /v1/dashboard/:agentId/transactions */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+app.get('/v1/dashboard/:agentId/transactions', viewTokenMiddleware as any, async (c) => {
+  const agentId = c.req.param('agentId') as string;
+  const limit = Math.min(parseInt(c.req.query('limit') ?? '50', 10) || 50, 100);
+  const offset = Math.max(0, parseInt(c.req.query('offset') ?? '0', 10) || 0);
+  const type = c.req.query('type');
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const conditions: any[] = [or(eq(transactions.fromAgentId, agentId), eq(transactions.toAgentId, agentId))];
+  if (type) conditions.push(eq(transactions.type, type));
+
+  const rows = await db.select().from(transactions)
+    .where(and(...conditions))
+    .orderBy(desc(transactions.createdAt))
+    .limit(limit)
+    .offset(offset);
+
+  return c.json({
+    transactions: rows.map(tx => ({
+      id: String(tx.id),
+      from_agent_id: tx.fromAgentId,
+      to_agent_id: tx.toAgentId,
+      amount: parseFloat(tx.amount),
+      currency: tx.currency,
+      type: tx.type,
+      task_id: tx.taskId,
+      memo: tx.memo,
+      created_at: tx.createdAt?.toISOString(),
+    })),
+    limit,
+    offset,
+  });
+});
+
+/** GET /v1/dashboard/:agentId/bids */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+app.get('/v1/dashboard/:agentId/bids', viewTokenMiddleware as any, async (c) => {
+  const agentId = c.req.param('agentId') as string;
+  const limit = Math.min(parseInt(c.req.query('limit') ?? '50', 10) || 50, 100);
+  const offset = Math.max(0, parseInt(c.req.query('offset') ?? '0', 10) || 0);
+  const status = c.req.query('status');
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const conditions: any[] = [eq(bids.agentId, agentId)];
+  if (status) conditions.push(eq(bids.status, status));
+
+  const rows = await db.select({
+    id: bids.id,
+    taskId: bids.taskId,
+    agentId: bids.agentId,
+    proposedApproach: bids.proposedApproach,
+    pricePoints: bids.pricePoints,
+    estimatedMinutes: bids.estimatedMinutes,
+    status: bids.status,
+    createdAt: bids.createdAt,
+    taskTitle: tasks.title,
+    taskCategory: tasks.category,
+    taskStatus: tasks.status,
+    taskPricePoints: tasks.pricePoints,
+  })
+    .from(bids)
+    .leftJoin(tasks, eq(tasks.id, bids.taskId))
+    .where(and(...conditions))
+    .orderBy(desc(bids.createdAt))
+    .limit(limit)
+    .offset(offset);
+
+  return c.json({
+    bids: rows.map(b => ({
+      id: b.id,
+      task_id: b.taskId,
+      agent_id: b.agentId,
+      proposed_approach: b.proposedApproach,
+      price_points: b.pricePoints ? parseFloat(b.pricePoints) : null,
+      estimated_minutes: b.estimatedMinutes,
+      status: b.status,
+      created_at: b.createdAt?.toISOString(),
+      task: {
+        title: b.taskTitle,
+        category: b.taskCategory,
+        status: b.taskStatus,
+        price_points: b.taskPricePoints ? parseFloat(b.taskPricePoints) : null,
+      },
+    })),
+    limit,
+    offset,
+  });
+});
+
+/** GET /v1/dashboard/:agentId/webhooks */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+app.get('/v1/dashboard/:agentId/webhooks', viewTokenMiddleware as any, async (c) => {
+  const agentId = c.req.param('agentId') as string;
+  const limit = Math.min(parseInt(c.req.query('limit') ?? '50', 10) || 50, 100);
+  const offset = Math.max(0, parseInt(c.req.query('offset') ?? '0', 10) || 0);
+
+  const rows = await db.select().from(webhookDeliveries)
+    .where(eq(webhookDeliveries.agentId, agentId))
+    .orderBy(desc(webhookDeliveries.createdAt))
+    .limit(limit)
+    .offset(offset);
+
+  return c.json({
+    webhooks: rows.map(w => ({
+      id: String(w.id),
+      agent_id: w.agentId,
+      event: w.event,
+      payload: w.payload,
+      status_code: w.statusCode,
+      attempt: w.attempt,
+      delivered: w.delivered,
+      created_at: w.createdAt?.toISOString(),
+    })),
+    limit,
+    offset,
   });
 });
 

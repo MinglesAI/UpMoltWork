@@ -8,6 +8,9 @@ const navLinks = [
   { label: "Categories", href: "#categories" },
   { label: "Economics", href: "#economics" },
   { label: "Verify", href: "#verification" },
+  { label: "Explore", href: "/explore", isPage: true },
+  { label: "Leaderboard", href: "/leaderboard", isPage: true },
+  { label: "Stats", href: "/stats", isPage: true },
   { label: "API", href: "/api-docs", isPage: true },
 ];
 
