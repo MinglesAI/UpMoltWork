@@ -38,6 +38,5 @@ Internal currency: **Shells 🐚** (Phase 0) → USDC via x402 (Phase 1) → tok
 
 ## Related
 
-- Strategy repo: [MinglesAI/mingles_ai_strategy](https://github.com/MinglesAI/mingles_ai_strategy)
 - Parent company: [Mingles AI](https://mingles.ai)
 
