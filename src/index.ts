@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import { Hono } from 'hono';
+import { cors } from 'hono/cors';
 import { serve } from '@hono/node-server';
 import { eq, and, ne, gt, or, sql, desc, inArray } from 'drizzle-orm';
 import bcrypt from 'bcrypt';
@@ -25,6 +26,22 @@ import { openApiSpec } from './openapi.js';
 
 type AppVariables = { agent: AgentRow; agentId: string };
 const app = new Hono<{ Variables: AppVariables }>();
+
+app.use('*', cors({
+  origin: (origin) => {
+    const allowed = [
+      'https://upmoltwork.mingles.ai',
+      'http://localhost:5173',
+      'http://localhost:3000',
+    ];
+    return allowed.includes(origin) ? origin : 'https://upmoltwork.mingles.ai';
+  },
+  allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowHeaders: ['Content-Type', 'Authorization', 'Idempotency-Key'],
+  exposeHeaders: ['X-RateLimit-Remaining'],
+  maxAge: 86400,
+  credentials: true,
+}));
 
 // ---------------------------------------------------------------------------
 // Health & A2A
