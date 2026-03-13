@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { eq, and, or, desc } from 'drizzle-orm';
 import { db } from '../db/pool.js';
 import { tasks, a2aTaskContexts, type AgentRow } from '../db/schema/index.js';
@@ -15,6 +16,7 @@ import {
   type ListTasksResult,
   type CancelTaskParams,
   type SetPushNotificationParams,
+  type GetPushNotificationParams,
   A2AErrorCode,
   A2AMethods,
 } from './types.js';
@@ -88,6 +90,7 @@ export function toA2ATask(umwTask: UmwTaskRow, ctx: A2ATaskContextRow | null): A
     history: [
       {
         role: 'user',
+        messageId: `msg-${umwTask.id}-init`,
         parts: [
           {
             type: 'data',
@@ -363,7 +366,7 @@ async function handleTasksCancel(
   return rpcOk(id, toA2ATask(updatedTask!, ctx));
 }
 
-async function handlePushConfig(
+async function handlePushConfigSet(
   id: string | number | null,
   params: SetPushNotificationParams,
   agent: AgentRow,
@@ -399,7 +402,45 @@ async function handlePushConfig(
     })
     .where(eq(a2aTaskContexts.a2aTaskId, a2aTaskId));
 
-  return rpcOk(id, { success: true });
+  return rpcOk(id, {
+    id: a2aTaskId,
+    pushNotificationConfig: {
+      url: pushNotificationConfig.url,
+      token: pushNotificationConfig.token ?? null,
+    },
+  });
+}
+
+async function handlePushConfigGet(
+  id: string | number | null,
+  params: GetPushNotificationParams,
+  agent: AgentRow,
+): Promise<JsonRpcResponse> {
+  const { id: a2aTaskId } = params;
+  if (!a2aTaskId) {
+    return rpcError(id, A2AErrorCode.InvalidParams, 'id is required');
+  }
+
+  const [ctx] = await db
+    .select()
+    .from(a2aTaskContexts)
+    .where(eq(a2aTaskContexts.a2aTaskId, a2aTaskId))
+    .limit(1);
+
+  if (!ctx) {
+    return rpcError(id, A2AErrorCode.TaskNotFound, `Task not found: ${a2aTaskId}`);
+  }
+
+  if (ctx.creatorAgentId !== agent.id) {
+    return rpcError(id, A2AErrorCode.InvalidParams, 'Only the task creator can view push notification config');
+  }
+
+  return rpcOk(id, {
+    id: a2aTaskId,
+    pushNotificationConfig: ctx.pushWebhookUrl
+      ? { url: ctx.pushWebhookUrl, token: ctx.pushToken ?? undefined }
+      : null,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -435,7 +476,10 @@ export async function handleA2ARequest(
         return await handleTasksCancel(id, req.params as CancelTaskParams, agent);
 
       case A2AMethods.TasksPushNotificationSet:
-        return await handlePushConfig(id, req.params as SetPushNotificationParams, agent);
+        return await handlePushConfigSet(id, req.params as SetPushNotificationParams, agent);
+
+      case A2AMethods.TasksPushNotificationGet:
+        return await handlePushConfigGet(id, req.params as GetPushNotificationParams, agent);
 
       case A2AMethods.TasksSubscribe:
         // SSE handled at route level; if we get here, return current task state

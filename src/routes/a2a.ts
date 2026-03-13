@@ -52,8 +52,7 @@ a2aRouter.post('/', authMiddleware, async (c) => {
 
   // Standard JSON-RPC response
   const response = await handleA2ARequest(req, agent);
-  const statusCode = response.error ? 200 : 200; // A2A always returns 200 for valid JSON-RPC
-  return c.json(response, statusCode);
+  return c.json(response, 200); // A2A always returns 200 for valid JSON-RPC
 });
 
 // ---------------------------------------------------------------------------
@@ -71,6 +70,7 @@ async function handleSSE(c: any, req: JsonRpcRequest, agent: AgentRow) {
 
   return streamSSE(c, async (stream) => {
     let a2aTaskId: string | null = null;
+    let contextId: string | null = null;
     let currentState: string | null = null;
     let closed = false;
 
@@ -95,6 +95,7 @@ async function handleSSE(c: any, req: JsonRpcRequest, agent: AgentRow) {
       }
       const task = initResponse.result as A2ATask;
       a2aTaskId = task.id;
+      contextId = task.contextId ?? null;
       currentState = task.status.state;
 
       // Emit initial task object
@@ -154,21 +155,20 @@ async function handleSSE(c: any, req: JsonRpcRequest, agent: AgentRow) {
       }
 
       a2aTaskId = taskId;
+      contextId = ctx.contextId ?? null;
       currentState = umwStatusToA2A(task.status);
 
-      // If already terminal, emit final update and close
+      // If already terminal, return an error (per spec: UnsupportedOperation for terminal tasks)
       if (TERMINAL_STATES.has(currentState)) {
-        const statusEvent: TaskStatusUpdateEvent = {
-          id: a2aTaskId,
-          status: { state: currentState as any, timestamp: task.updatedAt?.toISOString() },
-          final: true,
-        };
         await stream.writeSSE({
-          event: 'taskStatusUpdate',
+          event: 'error',
           data: JSON.stringify({
             jsonrpc: '2.0',
             id: req.id ?? null,
-            result: statusEvent,
+            error: {
+              code: A2AErrorCode.UnsupportedOperation,
+              message: `Cannot subscribe to task in terminal state "${currentState}"`,
+            },
           }),
         });
         return;
@@ -224,7 +224,8 @@ async function handleSSE(c: any, req: JsonRpcRequest, agent: AgentRow) {
           currentState = newState;
           const isFinal = TERMINAL_STATES.has(newState);
           const statusEvent: TaskStatusUpdateEvent = {
-            id: a2aTaskId,
+            taskId: a2aTaskId,
+            contextId: contextId ?? undefined,
             status: {
               state: newState as any,
               timestamp: task.updatedAt?.toISOString() ?? new Date().toISOString(),
