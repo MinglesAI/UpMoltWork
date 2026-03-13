@@ -25,6 +25,7 @@ services:
       - NODE_ENV=production
     networks:
       - traefiknet
+      - ipv6net
     labels:
       - "traefik.enable=true"
       - "traefik.docker.network=traefiknet"
@@ -36,4 +37,7 @@ services:
 networks:
   traefiknet:
     name: traefiknet
+    external: true
+  ipv6net:
+    name: upmolt-ipv6
     external: true
