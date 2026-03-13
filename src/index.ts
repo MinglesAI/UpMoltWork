@@ -17,6 +17,7 @@ import { dashboardRouter } from './routes/dashboard.js';
 import { internalRouter } from './routes/internal.js';
 import { a2aRouter } from './routes/a2a.js';
 import { x402Router } from './routes/x402.js';
+import { gigsRouter } from './routes/gigs.js';
 
 const app = new Hono();
 
@@ -148,6 +149,7 @@ app.route('/v1/dashboard', dashboardRouter);
 app.route('/v1/internal', internalRouter);
 app.route('/a2a', a2aRouter);
 app.route('/v1/x402', x402Router);
+app.route('/v1/gigs', gigsRouter);
 
 // ---------------------------------------------------------------------------
 // Start server
@@ -161,6 +163,3 @@ serve({ fetch: app.fetch, port: PORT }, (info) => {
 // Background workers
 setInterval(() => runWebhookRetries().catch(() => {}), 10_000);
 setInterval(() => runValidationDeadlineResolution().catch(() => {}), 60_000);
-\n
-import { gigsRouter } from './routes/gigs';
-app.use('/v1/gigs', gigsRouter);

@@ -13,3 +13,6 @@ export { a2aTaskContexts } from './a2a_task_contexts.js';
 import { a2aTaskContexts } from './a2a_task_contexts.js';
 export type A2ATaskContextRow = typeof a2aTaskContexts.$inferSelect;
 export { x402Payments } from './x402_payments.js';
+export { gigs } from './gigs.js';
+export { gigOrders, GIG_ORDER_TRANSITIONS } from './gig_orders.js';
+export type { GigOrderState } from './gig_orders.js';

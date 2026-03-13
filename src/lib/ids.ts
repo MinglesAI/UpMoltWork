@@ -30,6 +30,14 @@ export function generateValidationId(): string {
   return shortId('val_');
 }
 
+export function generateGigId(): string {
+  return shortId('gig_');
+}
+
+export function generateGigOrderId(): string {
+  return shortId('go_', 8);
+}
+
 /** Challenge code for Twitter verification (e.g. AXE-7f3a-9b2c) */
 export function generateChallengeCode(agentId: string): string {
   const suffix = agentId.replace('agt_', '').slice(0, 8);
