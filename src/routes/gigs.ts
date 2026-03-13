@@ -13,6 +13,17 @@ import {
 import { fireWebhook } from '../lib/webhooks.js';
 import { updateReputation, REPUTATION } from '../lib/reputation.js';
 import type { AgentRow } from '../db/schema/index.js';
+import {
+  uploadFile,
+  getSignedUrl,
+  deleteFile,
+  BUCKET_GIG_FILES,
+  BUCKET_ORDER_FILES,
+  ALLOWED_GIG_MIME_TYPES,
+  ALLOWED_ORDER_MIME_TYPES,
+  MAX_GIG_FILE_BYTES,
+  MAX_ORDER_FILE_BYTES,
+} from '../lib/storage.js';
 
 type AppVariables = { agent: AgentRow; agentId: string };
 
@@ -45,6 +56,7 @@ function formatGig(g: typeof gigs.$inferSelect) {
     price_points: g.pricePoints ? parseFloat(g.pricePoints) : null,
     price_usdc: g.priceUsdc ? parseFloat(g.priceUsdc) : null,
     status: g.status,
+    file_url: g.fileUrl ?? null,
     created_at: g.createdAt?.toISOString(),
     updated_at: g.updatedAt?.toISOString(),
   };
@@ -64,6 +76,7 @@ function formatOrder(o: typeof gigOrders.$inferSelect) {
     delivery_url: o.deliveryUrl,
     delivery_content: o.deliveryContent ? o.deliveryContent.slice(0, 500) : null,
     delivery_notes: o.deliveryNotes,
+    has_delivery_file: !!o.deliveryFileKey,
     buyer_feedback: o.buyerFeedback,
     revision_count: parseInt(o.revisionCount ?? '0', 10),
     accepted_at: o.acceptedAt?.toISOString() ?? null,
@@ -691,6 +704,171 @@ gigsRouter.post('/orders/:orderId/dispute', authMiddleware, async (c) => {
 
   const [updated] = await db.select().from(gigOrders).where(eq(gigOrders.id, orderId)).limit(1);
   return c.json(formatOrder(updated!), 200);
+});
+
+// ---------------------------------------------------------------------------
+// File Storage
+// ---------------------------------------------------------------------------
+
+/**
+ * POST /v1/gigs/:id/upload
+ * Attach a file (image or PDF) to a gig listing.
+ * Accepts multipart/form-data with a "file" field.
+ * Replaces any existing attachment.
+ *
+ * Access: gig creator only, gig must be open.
+ */
+gigsRouter.post('/:id/upload', authMiddleware, async (c) => {
+  const agent = c.get('agent');
+  const id = c.req.param('id') ?? '';
+  if (!id) return c.json({ error: 'invalid_request', message: 'Missing gig id' }, 400);
+
+  const [gig] = await db.select().from(gigs).where(eq(gigs.id, id)).limit(1);
+  if (!gig) return c.json({ error: 'not_found', message: 'Gig not found' }, 404);
+  if (gig.creatorAgentId !== agent.id)
+    return c.json({ error: 'forbidden', message: 'Not gig creator' }, 403);
+
+  let formData: FormData;
+  try {
+    formData = await c.req.formData();
+  } catch {
+    return c.json({ error: 'invalid_request', message: 'Expected multipart/form-data' }, 400);
+  }
+
+  const file = formData.get('file');
+  if (!file || !(file instanceof File)) {
+    return c.json({ error: 'invalid_request', message: '"file" field required' }, 400);
+  }
+
+  const contentType = file.type || 'application/octet-stream';
+  if (!(ALLOWED_GIG_MIME_TYPES as readonly string[]).includes(contentType)) {
+    return c.json(
+      { error: 'invalid_request', message: `File type not allowed. Accepted: ${ALLOWED_GIG_MIME_TYPES.join(', ')}` },
+      400,
+    );
+  }
+
+  const buffer = await file.arrayBuffer();
+  if (buffer.byteLength > MAX_GIG_FILE_BYTES) {
+    return c.json({ error: 'invalid_request', message: 'File too large (max 5 MB)' }, 400);
+  }
+
+  // Delete old file if present
+  if (gig.fileStoragePath) {
+    await deleteFile(gig.fileStoragePath, BUCKET_GIG_FILES).catch(() => {/* ignore stale cleanup errors */});
+  }
+
+  const { path, publicUrl } = await uploadFile(
+    BUCKET_GIG_FILES,
+    id,
+    file.name,
+    Buffer.from(buffer),
+    contentType,
+  );
+
+  await db.update(gigs).set({
+    fileStoragePath: path,
+    fileUrl: publicUrl ?? null,
+    updatedAt: new Date(),
+  }).where(eq(gigs.id, id));
+
+  const [updated] = await db.select().from(gigs).where(eq(gigs.id, id)).limit(1);
+  return c.json(formatGig(updated!), 200);
+});
+
+/**
+ * POST /v1/gigs/orders/:orderId/upload
+ * Seller uploads a delivery file for an order.
+ * Accepts multipart/form-data with a "file" field.
+ * The file is stored privately; buyers access it via the signed URL endpoint.
+ *
+ * Access: order seller only, order must be in accepted or revision_requested state.
+ */
+gigsRouter.post('/orders/:orderId/upload', authMiddleware, async (c) => {
+  const agent = c.get('agent');
+  const orderId = c.req.param('orderId') ?? '';
+  if (!orderId) return c.json({ error: 'invalid_request', message: 'Missing order id' }, 400);
+
+  const [order] = await db.select().from(gigOrders).where(eq(gigOrders.id, orderId)).limit(1);
+  if (!order) return c.json({ error: 'not_found', message: 'Order not found' }, 404);
+  if (order.sellerAgentId !== agent.id)
+    return c.json({ error: 'forbidden', message: 'Only the seller can upload delivery files' }, 403);
+
+  const allowedUploadStates = ['accepted', 'revision_requested'];
+  if (!allowedUploadStates.includes(order.status!)) {
+    return c.json(
+      { error: 'conflict', message: `File upload only allowed in: ${allowedUploadStates.join(', ')} states` },
+      409,
+    );
+  }
+
+  let formData: FormData;
+  try {
+    formData = await c.req.formData();
+  } catch {
+    return c.json({ error: 'invalid_request', message: 'Expected multipart/form-data' }, 400);
+  }
+
+  const file = formData.get('file');
+  if (!file || !(file instanceof File)) {
+    return c.json({ error: 'invalid_request', message: '"file" field required' }, 400);
+  }
+
+  const contentType = file.type || 'application/octet-stream';
+  if (!(ALLOWED_ORDER_MIME_TYPES as readonly string[]).includes(contentType)) {
+    return c.json(
+      { error: 'invalid_request', message: `File type not allowed. Accepted: ${ALLOWED_ORDER_MIME_TYPES.join(', ')}` },
+      400,
+    );
+  }
+
+  const buffer = await file.arrayBuffer();
+  if (buffer.byteLength > MAX_ORDER_FILE_BYTES) {
+    return c.json({ error: 'invalid_request', message: 'File too large (max 50 MB)' }, 400);
+  }
+
+  // Delete old delivery file if present
+  if (order.deliveryFileKey) {
+    await deleteFile(order.deliveryFileKey, BUCKET_ORDER_FILES).catch(() => {/* ignore */});
+  }
+
+  const { path } = await uploadFile(
+    BUCKET_ORDER_FILES,
+    orderId,
+    file.name,
+    Buffer.from(buffer),
+    contentType,
+  );
+
+  await db.update(gigOrders).set({
+    deliveryFileKey: path,
+    updatedAt: new Date(),
+  }).where(eq(gigOrders.id, orderId));
+
+  return c.json({ success: true, message: 'Delivery file uploaded. Use the deliver endpoint to submit the order.' }, 200);
+});
+
+/**
+ * GET /v1/gigs/orders/:orderId/delivery-file
+ * Get a short-lived signed URL for the delivery file.
+ * Access: buyer or seller of the order.
+ */
+gigsRouter.get('/orders/:orderId/delivery-file', authMiddleware, async (c) => {
+  const agent = c.get('agent');
+  const orderId = c.req.param('orderId') ?? '';
+  if (!orderId) return c.json({ error: 'invalid_request', message: 'Missing order id' }, 400);
+
+  const [order] = await db.select().from(gigOrders).where(eq(gigOrders.id, orderId)).limit(1);
+  if (!order) return c.json({ error: 'not_found', message: 'Order not found' }, 404);
+  if (order.buyerAgentId !== agent.id && order.sellerAgentId !== agent.id)
+    return c.json({ error: 'forbidden', message: 'Not your order' }, 403);
+
+  if (!order.deliveryFileKey) {
+    return c.json({ error: 'not_found', message: 'No delivery file attached to this order' }, 404);
+  }
+
+  const signedUrl = await getSignedUrl(order.deliveryFileKey, 3600);
+  return c.json({ signed_url: signedUrl, expires_in: 3600 }, 200);
 });
 
 /**
