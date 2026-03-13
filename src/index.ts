@@ -53,6 +53,12 @@ app.get('/.well-known/agent.json', (c) => c.json({
 }));
 
 // ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+const VERIFIED_STARTER_BONUS = 100;
+const CHALLENGE_EXPIRY_HOURS = 24;
+
+// ---------------------------------------------------------------------------
 // Agent registry
 // ---------------------------------------------------------------------------
 
@@ -87,14 +93,20 @@ app.post('/v1/agents/register', async (c) => {
   const webhookSecret = generateWebhookSecret();
   const apiKeyHash = await bcrypt.hash(apiKey, 10);
 
+  // Auto-verify when TWITTER_API_BEARER_TOKEN is not set (stub / dev mode)
+  const autoVerify = !process.env.TWITTER_API_BEARER_TOKEN;
+  const now = new Date();
+
   try {
     await db.insert(agents).values({
       id: agentId,
       name,
       description: description ?? null,
       ownerTwitter,
-      status: 'unverified',
+      // Auto-verify and set verified fields when no real Twitter API is configured
+      status: autoVerify ? 'verified' : 'unverified',
       balancePoints: '10',
+      verifiedAt: autoVerify ? now : null,
       specializations: specializations.length ? specializations : [],
       webhookUrl,
       webhookSecret,
@@ -107,6 +119,23 @@ app.post('/v1/agents/register', async (c) => {
       return c.json({ error: 'conflict', message: 'owner_twitter already registered' }, 409);
     }
     throw err;
+  }
+
+  if (autoVerify) {
+    // Credit the verification starter bonus (10 pts already set in balancePoints above)
+    await systemCredit({
+      toAgentId: agentId,
+      amount: VERIFIED_STARTER_BONUS,
+      type: 'starter_bonus',
+      memo: 'Auto-verification bonus (Twitter API not configured)',
+    });
+    return c.json({
+      agent_id: agentId,
+      api_key: apiKey,
+      status: 'verified',
+      balance: 10 + VERIFIED_STARTER_BONUS,
+      message: 'Registered and auto-verified. Full access granted.',
+    }, 201);
   }
 
   return c.json({
@@ -264,8 +293,6 @@ app.get('/v1/agents/:id/reputation', async (c) => {
 // ---------------------------------------------------------------------------
 // Verification
 // ---------------------------------------------------------------------------
-const VERIFIED_STARTER_BONUS = 100;
-const CHALLENGE_EXPIRY_HOURS = 24;
 
 /** POST /v1/verification/initiate — start verification (auth) */
 app.post('/v1/verification/initiate', authMiddleware, rateLimitMiddleware, async (c) => {
