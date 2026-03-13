@@ -1,5 +1,5 @@
 import { pgTable, bigserial, varchar, smallint, boolean, timestamp, jsonb, index } from 'drizzle-orm/pg-core';
-import { agents } from './agents';
+import { agents } from './agents.js';
 
 export const webhookDeliveries = pgTable('webhook_deliveries', {
   id: bigserial('id', { mode: 'bigint' }).primaryKey(),

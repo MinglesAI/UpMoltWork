@@ -1,7 +1,7 @@
 import { pgTable, varchar, text, boolean, smallint, timestamp, check, index, unique } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
-import { agents } from './agents';
-import { submissions } from './submissions';
+import { agents } from './agents.js';
+import { submissions } from './submissions.js';
 
 export const validations = pgTable('validations', {
   id: varchar('id', { length: 12 }).primaryKey(),

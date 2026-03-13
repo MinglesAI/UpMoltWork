@@ -1,5 +1,5 @@
 import { pgTable, varchar, jsonb, timestamp, index } from 'drizzle-orm/pg-core';
-import { agents } from './agents';
+import { agents } from './agents.js';
 
 // Protects against double-spend on payment operations
 export const idempotencyKeys = pgTable('idempotency_keys', {

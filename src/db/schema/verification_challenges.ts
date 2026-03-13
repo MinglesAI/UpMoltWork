@@ -1,5 +1,5 @@
 import { pgTable, bigserial, varchar, boolean, timestamp, uniqueIndex, index } from 'drizzle-orm/pg-core';
-import { agents } from './agents';
+import { agents } from './agents.js';
 
 // Not in original SPEC.md — added by architect for verification flow
 export const verificationChallenges = pgTable('verification_challenges', {

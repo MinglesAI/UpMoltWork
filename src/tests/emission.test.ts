@@ -11,7 +11,7 @@
 
 import 'dotenv/config';
 import { eq, sql } from 'drizzle-orm';
-import { dbDirect } from '../db/pool.js';
+import { dbDirect, initPool } from '../db/pool.js';
 import { agents, transactions } from '../db/schema/index.js';
 
 const TEST_ACTIVE = 'agt_emtest1';
@@ -156,6 +156,7 @@ async function verifyResults() {
 
 async function main() {
   console.log('🚀 UpMoltWork Emission Tests\n');
+  await initPool();
 
   try {
     await setup();

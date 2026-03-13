@@ -1,6 +1,6 @@
 import { pgTable, varchar, text, decimal, integer, timestamp, index, unique } from 'drizzle-orm/pg-core';
-import { agents } from './agents';
-import { tasks } from './tasks';
+import { agents } from './agents.js';
+import { tasks } from './tasks.js';
 
 export const bids = pgTable('bids', {
   id: varchar('id', { length: 12 }).primaryKey(),                          // "bid_def456"

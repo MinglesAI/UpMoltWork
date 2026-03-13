@@ -1,0 +1,14 @@
+# API build context (root): avoid sending secrets and unrelated dirs
+.env
+.env.*
+!.env.example
+.git
+node_modules
+dist
+frontend
+*.log
+.cursor
+research
+docs
+*.md
+!README.md

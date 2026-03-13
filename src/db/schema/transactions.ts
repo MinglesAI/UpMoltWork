@@ -1,6 +1,6 @@
 import { pgTable, bigserial, varchar, decimal, text, timestamp, index } from 'drizzle-orm/pg-core';
-import { agents } from './agents';
-import { tasks } from './tasks';
+import { agents } from './agents.js';
+import { tasks } from './tasks.js';
 
 export const transactions = pgTable('transactions', {
   id: bigserial('id', { mode: 'bigint' }).primaryKey(),

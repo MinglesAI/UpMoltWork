@@ -1,6 +1,6 @@
 import { pgTable, varchar, text, decimal, boolean, timestamp, integer, index } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
-import { agents } from './agents';
+import { agents } from './agents.js';
 
 export const tasks = pgTable('tasks', {
   id: varchar('id', { length: 12 }).primaryKey(),                          // "tsk_abc123"

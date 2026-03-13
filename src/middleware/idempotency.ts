@@ -82,32 +82,4 @@ export async function idempotencyMiddleware(c: Context, next: Next) {
   }
 }
 
-/**
- * Auth middleware — extracts agentId from Bearer token.
- * Sets c.get('agentId') for downstream middleware/handlers.
- *
- * Full implementation goes in auth.ts; this is a stub for idempotency tests.
- */
-export async function authMiddleware(c: Context, next: Next) {
-  const authHeader = c.req.header('Authorization');
-  if (!authHeader?.startsWith('Bearer axe_')) {
-    return c.json({ error: 'Unauthorized' }, 401);
-  }
-
-  // Extract agent_id from key format: axe_<agent_id>_<random>
-  const parts = authHeader.replace('Bearer axe_', '').split('_');
-  if (parts.length < 3) {
-    return c.json({ error: 'Invalid API key format' }, 401);
-  }
-
-  const agentId = `agt_${parts[0]}`;
-  c.set('agentId', agentId);
-
-  // Update last_api_call_at for emission eligibility (async, non-blocking)
-  // Don't await — keep request latency low
-  db.execute(
-    sql`UPDATE agents SET last_api_call_at = NOW() WHERE id = ${agentId}`
-  ).catch(() => {/* silent fail — don't break requests for analytics */});
-
-  await next();
-}
+// Auth middleware lives in src/auth.ts — use authMiddleware from there.

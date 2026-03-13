@@ -1,3 +1,4 @@
+import { lookup } from 'node:dns/promises';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import pg from 'pg';
 import * as schema from './schema/index.js';
@@ -5,19 +6,23 @@ import * as schema from './schema/index.js';
 const { Pool } = pg;
 
 /**
- * Connection URLs:
- *
- * DATABASE_POOLER_URL  — Supavisor (transaction mode, port 6543)
- *   Use for most read/write API operations.
- *   Format: postgresql://postgres.<project-ref>:<pw>@aws-0-<region>.pooler.supabase.com:6543/postgres
- *
- * DATABASE_URL  — Direct PostgreSQL (port 5432)
- *   Use for: SELECT...FOR UPDATE, DDL migrations, long sessions.
- *   Format: postgresql://postgres:<pw>@db.<project-ref>.supabase.co:5432/postgres
- *
- * Fallback: if DATABASE_POOLER_URL is not set, the pooler uses DATABASE_URL directly.
- * This is safe for development but reduces connection efficiency in production.
+ * Resolve host in a postgres URL to IPv4 and return a new URL.
+ * Fixes ENETUNREACH when Docker has no IPv6 but Supabase host resolves to IPv6 first.
  */
+async function connectionStringWithIPv4(connectionString: string): Promise<string> {
+  try {
+    const url = new URL(connectionString.replace(/^postgresql:\/\//, 'https://'));
+    const host = url.hostname;
+    const { address } = await lookup(host, { family: 4 });
+    const auth = url.username && url.password
+      ? `${encodeURIComponent(url.username)}:${encodeURIComponent(url.password)}@`
+      : '';
+    return `postgresql://${auth}${address}:${url.port}${url.pathname}${url.search || ''}`;
+  } catch {
+    return connectionString;
+  }
+}
+
 const poolerUrl = process.env.DATABASE_POOLER_URL ?? process.env.DATABASE_URL;
 const directUrl = process.env.DATABASE_URL;
 
@@ -25,51 +30,49 @@ if (!directUrl) {
   throw new Error('DATABASE_URL is required');
 }
 
-/**
- * Pooled connection via Supavisor (transaction mode).
- * Use for most read/write operations.
- *
- * ⚠️ NOT suitable for:
- *   - `SELECT ... FOR UPDATE` (requires session-level state)
- *   - DDL / schema migrations
- *   - `SET` session variables
- *
- * Note: If DATABASE_POOLER_URL is unreachable (e.g., during local dev from
- * restricted IPs), falls back to DATABASE_URL automatically.
- * Supavisor is available on Supabase Pro plan; on Free plan the pooler
- * endpoint resolves but may reject connections from non-Supabase IPs.
- */
-const poolerPool = new Pool({
-  connectionString: poolerUrl,
-  // Supavisor manages the actual pool size; keep client-side pool small
-  max: 5,
-  idleTimeoutMillis: 30_000,
-  connectionTimeoutMillis: 5_000,
+let poolerPool!: pg.Pool;
+let directPool!: pg.Pool;
+let _db!: ReturnType<typeof drizzle>;
+let _dbDirect!: ReturnType<typeof drizzle>;
+
+export async function initPool(): Promise<void> {
+  const poolerStr = poolerUrl ?? directUrl;
+  const directStr = directUrl;
+  if (!poolerStr || !directStr) throw new Error('DATABASE_URL is required');
+  const poolerResolved = await connectionStringWithIPv4(poolerStr);
+  const directResolved = await connectionStringWithIPv4(directStr);
+
+  poolerPool = new Pool({
+    connectionString: poolerResolved,
+    max: 5,
+    idleTimeoutMillis: 30_000,
+    connectionTimeoutMillis: 5_000,
+  });
+  poolerPool.on('error', (err) => {
+    console.warn('[pool] Pooler connection error (will retry):', err.message);
+  });
+
+  directPool = new Pool({
+    connectionString: directResolved,
+    max: 3,
+    idleTimeoutMillis: 60_000,
+    connectionTimeoutMillis: 10_000,
+  });
+
+  _db = drizzle(poolerPool, { schema });
+  _dbDirect = drizzle(directPool, { schema });
+}
+
+export const db = new Proxy({} as ReturnType<typeof drizzle>, {
+  get(_, prop) {
+    if (!_db) throw new Error('DB not initialized: call await initPool() first');
+    return (_db as unknown as Record<string, unknown>)[prop as string];
+  },
 });
-
-// Gracefully handle pooler connection errors without crashing the process.
-// In production the pooler is always reachable; in dev it may not be.
-poolerPool.on('error', (err) => {
-  console.warn('[pool] Pooler connection error (will retry):', err.message);
+export const dbDirect = new Proxy({} as ReturnType<typeof drizzle>, {
+  get(_, prop) {
+    if (!_dbDirect) throw new Error('DB not initialized: call await initPool() first');
+    return (_dbDirect as unknown as Record<string, unknown>)[prop as string];
+  },
 });
-
-/**
- * Direct connection to PostgreSQL (bypasses Supavisor pooler).
- * Use for:
- *   - `SELECT ... FOR UPDATE` (pessimistic locking in Shells transfers)
- *   - Schema migrations
- *   - Long-running transactions requiring session state
- */
-const directPool = new Pool({
-  connectionString: directUrl,
-  max: 3,
-  idleTimeoutMillis: 60_000,
-  connectionTimeoutMillis: 10_000,
-});
-
-// Drizzle ORM instances
-export const db = drizzle(poolerPool, { schema });         // For standard read/write
-export const dbDirect = drizzle(directPool, { schema });   // For FOR UPDATE + migrations
-
-// Export pools for health checks
 export { poolerPool, directPool };

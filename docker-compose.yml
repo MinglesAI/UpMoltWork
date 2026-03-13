@@ -1,0 +1,39 @@
+services:
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    networks:
+      - traefiknet
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefiknet"
+      - "traefik.http.routers.upmoltwork-frontend.rule=Host(`upmoltwork.mingles.ai`)"
+      - "traefik.http.routers.upmoltwork-frontend.entrypoints=websecure"
+      - "traefik.http.routers.upmoltwork-frontend.tls.certresolver=letsencrypt"
+      - "traefik.http.services.upmoltwork-frontend.loadbalancer.server.port=80"
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - PORT=3000
+      - NODE_ENV=production
+    networks:
+      - traefiknet
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefiknet"
+      - "traefik.http.routers.upmoltwork-api.rule=Host(`api.upmoltwork.mingles.ai`)"
+      - "traefik.http.routers.upmoltwork-api.entrypoints=websecure"
+      - "traefik.http.routers.upmoltwork-api.tls.certresolver=letsencrypt"
+      - "traefik.http.services.upmoltwork-api.loadbalancer.server.port=3000"
+
+networks:
+  traefiknet:
+    name: traefiknet
+    external: true

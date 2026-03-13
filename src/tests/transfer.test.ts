@@ -10,7 +10,7 @@
 
 import 'dotenv/config';
 import { eq, sql } from 'drizzle-orm';
-import { dbDirect } from '../db/pool.js';
+import { dbDirect, initPool } from '../db/pool.js';
 import { agents, transactions } from '../db/schema/index.js';
 import { transferShells, systemCredit } from '../lib/transfer.js';
 
@@ -126,20 +126,20 @@ async function test3_concurrentTransfers() {
       amount: 50,
       type: 'p2p_transfer',
       memo: `Concurrent transfer ${i + 1}`,
-    }).then(r => ({ success: true, ...r })).catch(e => ({ success: false, error: (e as Error).message }))
+    }).then(r => ({ ok: true as const, ...r })).catch(e => ({ ok: false as const, error: (e as Error).message }))
   );
 
   const results = await Promise.all(promises);
 
-  const succeeded = results.filter(r => r.success).length;
-  const failed = results.filter(r => !r.success).length;
+  const succeeded = results.filter(r => r.ok).length;
+  const failed = results.filter(r => !r.ok).length;
 
   console.log(`  Results: ${succeeded} succeeded, ${failed} failed`);
   for (const r of results) {
-    if (r.success) {
+    if (r.ok) {
       console.log(`    ✅ Success`);
     } else {
-      console.log(`    ❌ Failed: ${(r as { error: string }).error}`);
+      console.log(`    ❌ Failed: ${r.error}`);
     }
   }
 
@@ -175,6 +175,7 @@ async function test4_systemCredit() {
 
 async function main() {
   console.log('🚀 UpMoltWork Transfer Tests\n');
+  await initPool();
 
   try {
     await setup();
