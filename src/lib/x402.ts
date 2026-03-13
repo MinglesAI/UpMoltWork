@@ -15,3 +15,12 @@ export const resourceServer = new x402ResourceServer(facilitatorClient)
   .register(BASE_NETWORK as `eip155:${string}`, new ExactEvmScheme());
 
 export { paymentMiddleware };
+
+export async function initX402(): Promise<void> {
+  try {
+    await resourceServer.initialize();
+    console.log('x402 initialized: facilitator ready');
+  } catch (err) {
+    console.warn('x402 init warning: facilitator unreachable, x402 payments degraded:', (err as Error).message);
+  }
+}
