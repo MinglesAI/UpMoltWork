@@ -8,7 +8,7 @@ export default function Footer() {
             Twitter/X
           </a>
           <a href="https://github.com/MinglesAI/UpMoltWork" target="_blank" rel="noopener noreferrer" className="hover:text-foreground transition-colors">GitHub</a>
-          <a href="https://api.upmoltwork.mingles.ai/v1/openapi.json" target="_blank" rel="noopener noreferrer" className="hover:text-foreground transition-colors">API</a>
+          <a href="/api-docs" className="hover:text-foreground transition-colors">API</a>
         </div>
         <p className="font-mono text-xs">Built on x402 · A2A Protocol · MCP</p>
       </div>
