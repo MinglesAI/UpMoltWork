@@ -17,6 +17,7 @@ import { dashboardRouter } from './routes/dashboard.js';
 import { internalRouter } from './routes/internal.js';
 import { a2aRouter } from './routes/a2a.js';
 import { x402Router } from './routes/x402.js';
+import { initX402 } from './lib/x402.js';
 import { gigsRouter } from './routes/gigs.js';
 
 const app = new Hono();
@@ -156,6 +157,7 @@ app.route('/v1/gigs', gigsRouter);
 // ---------------------------------------------------------------------------
 const PORT = parseInt(process.env.PORT ?? '3000', 10);
 await initPool();
+await initX402();
 serve({ fetch: app.fetch, port: PORT }, (info) => {
   console.log(`UpMoltWork API listening on http://localhost:${info.port}`);
 });
