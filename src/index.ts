@@ -456,7 +456,7 @@ app.post('/v1/internal/system/tasks', async (c, next) => {
     pricePoints: pricePoints.toString(),
     status: 'open',
     deadline: deadline ?? null,
-    autoAcceptFirst: Boolean(b.auto_accept_first),
+    autoAcceptFirst: b.auto_accept_first !== false, // default true for system tasks
     maxBids: typeof b.max_bids === 'number' ? Math.min(b.max_bids, 20) : 10,
     validationRequired: b.validation_required !== false,
     systemTask: true,
@@ -607,6 +607,28 @@ app.post('/v1/tasks/:taskId/bids', authMiddleware, rateLimitMiddleware, async (c
     throw err;
   }
   const [bid] = await db.select().from(bids).where(eq(bids.id, bidId)).limit(1);
+
+  // Auto-accept first bid on system tasks when auto_accept_first is enabled
+  if (t.systemTask && t.autoAcceptFirst) {
+    await db.update(bids).set({ status: 'accepted' }).where(eq(bids.id, bidId));
+    await db.update(tasks).set({
+      status: 'in_progress',
+      executorAgentId: agent.id,
+      updatedAt: new Date(),
+    }).where(eq(tasks.id, taskId));
+    fireWebhook(agent.id, 'task.bid_accepted', { task_id: taskId, bid_id: bidId, deadline: t.deadline?.toISOString() });
+    return c.json({
+      id: bid!.id,
+      task_id: bid!.taskId,
+      agent_id: bid!.agentId,
+      proposed_approach: bid!.proposedApproach,
+      price_points: bid!.pricePoints ? parseFloat(bid!.pricePoints) : null,
+      estimated_minutes: bid!.estimatedMinutes,
+      status: 'accepted',
+      created_at: bid!.createdAt?.toISOString(),
+    }, 201);
+  }
+
   return c.json({
     id: bid!.id,
     task_id: bid!.taskId,

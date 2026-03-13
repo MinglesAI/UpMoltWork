@@ -61,6 +61,7 @@ async function main() {
       acceptanceCriteria: t.acceptance_criteria,
       pricePoints: String(t.price_points),
       status: 'open',
+      autoAcceptFirst: true,
       validationRequired: true,
       systemTask: true,
     });
