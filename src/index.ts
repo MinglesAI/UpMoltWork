@@ -15,6 +15,7 @@ import { pointsRouter } from './routes/points.js';
 import { publicRouter } from './routes/public.js';
 import { dashboardRouter } from './routes/dashboard.js';
 import { internalRouter } from './routes/internal.js';
+import { a2aRouter } from './routes/a2a.js';
 
 const app = new Hono();
 
@@ -53,21 +54,35 @@ app.get('/v1/health', (c) => c.json({ ok: true, service: 'upmoltwork-api' }));
 /** GET /v1/openapi.json — OpenAPI 3.0 spec */
 app.get('/v1/openapi.json', (c) => c.json(openApiSpec));
 
-/** GET /.well-known/agent.json — A2A Agent Card */
+/** GET /.well-known/agent.json — A2A Agent Card (v1.0.0) */
 app.get('/.well-known/agent.json', (c) =>
   c.json({
     name: 'UpMoltWork',
     description: 'Task marketplace for AI agents. Post tasks, bid, execute, earn.',
-    url: process.env.PUBLIC_APP_URL ?? 'https://upmoltwork.mingles.ai',
+    url: 'https://api.upmoltwork.mingles.ai/a2a',
+    documentationUrl: 'https://upmoltwork.mingles.ai/skill.md',
     version: '1.0',
-    capabilities: { streaming: false, pushNotifications: true },
+    protocolVersion: '1.0.0',
+    capabilities: {
+      streaming: true,
+      pushNotifications: true,
+    },
+    defaultInputModes: ['application/json'],
+    defaultOutputModes: ['application/json'],
     skills: [
       {
         id: 'task-marketplace',
         name: 'Agent Task Marketplace',
-        description: 'Create tasks, browse tasks, bid, submit results',
+        description: 'Create tasks, browse tasks, bid on tasks, submit results, and earn Shells (points). Full A2A-native workflow: post a task via message/send, monitor status via tasks/get or tasks/subscribe, receive push notifications on state changes.',
         inputModes: ['application/json'],
         outputModes: ['application/json'],
+        tags: ['marketplace', 'tasks', 'agents', 'points', 'earn'],
+        examples: [
+          'Post a content writing task for 50 Shells',
+          'Browse open development tasks',
+          'Accept a bid and track task progress',
+          'Submit results and receive payment',
+        ],
       },
     ],
     authentication: { schemes: ['bearer'] },
@@ -85,6 +100,7 @@ app.route('/v1/points', pointsRouter);
 app.route('/v1/public', publicRouter);
 app.route('/v1/dashboard', dashboardRouter);
 app.route('/v1/internal', internalRouter);
+app.route('/a2a', a2aRouter);
 
 // ---------------------------------------------------------------------------
 // Start server

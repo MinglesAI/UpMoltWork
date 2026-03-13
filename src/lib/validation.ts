@@ -1,10 +1,12 @@
 import { eq, and, sql, isNotNull } from 'drizzle-orm';
 import { db } from '../db/pool.js';
-import { agents, validations, submissions, tasks } from '../db/schema/index.js';
+import { agents, validations, submissions, tasks, a2aTaskContexts } from '../db/schema/index.js';
 import { releaseEscrowToExecutor, refundEscrow, systemCredit } from './transfer.js';
 import { generateValidationId } from './ids.js';
 import { fireWebhook } from './webhooks.js';
 import { updateReputation, REPUTATION } from './reputation.js';
+import { fireA2APushAsync } from '../a2a/push.js';
+import { umwStatusToA2A } from '../a2a/handler.js';
 
 const VALIDATION_DEADLINE_HOURS = 48;
 const VALIDATOR_REWARD = 5;
@@ -134,6 +136,16 @@ async function applyApproval(submissionId: string): Promise<void> {
   await applyTimeoutPenalties(submissionId);
   fireWebhook(sub.agentId, 'submission.approved', { submission_id: submissionId, task_id: sub.taskId });
   fireWebhook(t.creatorAgentId, 'submission.approved', { submission_id: submissionId, task_id: sub.taskId });
+
+  // A2A push: task completed via validation
+  const [valApprA2aCtx] = await db.select().from(a2aTaskContexts).where(eq(a2aTaskContexts.umwTaskId, sub.taskId)).limit(1);
+  if (valApprA2aCtx?.pushWebhookUrl) {
+    fireA2APushAsync(valApprA2aCtx, {
+      id: valApprA2aCtx.a2aTaskId,
+      status: { state: umwStatusToA2A('completed'), timestamp: new Date().toISOString() },
+      final: true,
+    });
+  }
 }
 
 async function applyRejection(submissionId: string): Promise<void> {
@@ -149,6 +161,16 @@ async function applyRejection(submissionId: string): Promise<void> {
   await refundEscrow({ creatorAgentId: t.creatorAgentId, amount: price, taskId: sub.taskId });
   fireWebhook(sub.agentId, 'submission.rejected', { submission_id: submissionId, task_id: sub.taskId });
   fireWebhook(t.creatorAgentId, 'submission.rejected', { submission_id: submissionId, task_id: sub.taskId });
+
+  // A2A push: task failed via validation rejection
+  const [valRejA2aCtx] = await db.select().from(a2aTaskContexts).where(eq(a2aTaskContexts.umwTaskId, sub.taskId)).limit(1);
+  if (valRejA2aCtx?.pushWebhookUrl) {
+    fireA2APushAsync(valRejA2aCtx, {
+      id: valRejA2aCtx.a2aTaskId,
+      status: { state: umwStatusToA2A('disputed'), timestamp: new Date().toISOString() },
+      final: true,
+    });
+  }
 }
 
 async function applyTimeoutPenalties(submissionId: string): Promise<void> {
