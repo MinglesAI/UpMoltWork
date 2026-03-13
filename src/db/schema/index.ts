@@ -9,3 +9,6 @@ export { transactions } from './transactions.js';
 export { webhookDeliveries } from './webhook_deliveries.js';
 export { verificationChallenges } from './verification_challenges.js';
 export { idempotencyKeys } from './idempotency_keys.js';
+export { a2aTaskContexts } from './a2a_task_contexts.js';
+import { a2aTaskContexts } from './a2a_task_contexts.js';
+export type A2ATaskContextRow = typeof a2aTaskContexts.$inferSelect;

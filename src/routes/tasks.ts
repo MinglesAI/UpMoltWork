@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { eq, and, ne, gt, desc, sql, inArray } from 'drizzle-orm';
 import { db } from '../db/pool.js';
-import { agents, tasks, bids, submissions, validations, type AgentRow } from '../db/schema/index.js';
+import { agents, tasks, bids, submissions, validations, a2aTaskContexts, type AgentRow } from '../db/schema/index.js';
 import { authMiddleware } from '../auth.js';
 import { generateTaskId, generateBidId, generateSubmissionId } from '../lib/ids.js';
 import {
@@ -13,6 +13,8 @@ import { assignValidators, resolveValidation } from '../lib/validation.js';
 import { fireWebhook } from '../lib/webhooks.js';
 import { updateReputation, REPUTATION } from '../lib/reputation.js';
 import { rateLimitMiddleware } from '../middleware/rateLimit.js';
+import { fireA2APushAsync } from '../a2a/push.js';
+import { umwStatusToA2A } from '../a2a/handler.js';
 
 type AppVariables = { agent: AgentRow; agentId: string };
 
@@ -288,6 +290,16 @@ tasksRouter.delete('/:id', authMiddleware, rateLimitMiddleware, async (c) => {
   await refundEscrow({ creatorAgentId: agent.id, amount: price, taskId: id });
   await db.update(tasks).set({ status: 'cancelled', updatedAt: new Date() }).where(eq(tasks.id, id));
 
+  // Fire A2A push notification if task was created via A2A
+  const [a2aCtx] = await db.select().from(a2aTaskContexts).where(eq(a2aTaskContexts.umwTaskId, id)).limit(1);
+  if (a2aCtx?.pushWebhookUrl) {
+    fireA2APushAsync(a2aCtx, {
+      id: a2aCtx.a2aTaskId,
+      status: { state: umwStatusToA2A('cancelled'), timestamp: new Date().toISOString() },
+      final: true,
+    });
+  }
+
   return c.json({ message: 'Task cancelled', refund: price }, 200);
 });
 
@@ -385,6 +397,16 @@ tasksRouter.post('/:taskId/bids', authMiddleware, rateLimitMiddleware, async (c)
       deadline: t.deadline?.toISOString(),
     });
 
+    // A2A push: task moved to working
+    const [autoA2aCtx] = await db.select().from(a2aTaskContexts).where(eq(a2aTaskContexts.umwTaskId, taskId)).limit(1);
+    if (autoA2aCtx?.pushWebhookUrl) {
+      fireA2APushAsync(autoA2aCtx, {
+        id: autoA2aCtx.a2aTaskId,
+        status: { state: umwStatusToA2A('in_progress'), timestamp: new Date().toISOString() },
+        final: false,
+      });
+    }
+
     return c.json({ ...formatBid(bid!), status: 'accepted' }, 201);
   }
 
@@ -466,6 +488,16 @@ tasksRouter.post('/:taskId/bids/:bidId/accept', authMiddleware, rateLimitMiddlew
     bid_id: bidId,
     deadline: t.deadline?.toISOString(),
   });
+
+  // A2A push: task moved to working
+  const [bidAcceptA2aCtx] = await db.select().from(a2aTaskContexts).where(eq(a2aTaskContexts.umwTaskId, taskId)).limit(1);
+  if (bidAcceptA2aCtx?.pushWebhookUrl) {
+    fireA2APushAsync(bidAcceptA2aCtx, {
+      id: bidAcceptA2aCtx.a2aTaskId,
+      status: { state: umwStatusToA2A('in_progress'), timestamp: new Date().toISOString() },
+      final: false,
+    });
+  }
 
   return c.json({ message: 'Bid accepted', executor_agent_id: bid.agentId }, 200);
 });
@@ -598,6 +630,16 @@ tasksRouter.post('/:taskId/submit', authMiddleware, rateLimitMiddleware, async (
     submission_id: subId,
     task_id: taskId,
   });
+
+  // A2A push: task completed
+  const [approvedA2aCtx] = await db.select().from(a2aTaskContexts).where(eq(a2aTaskContexts.umwTaskId, taskId)).limit(1);
+  if (approvedA2aCtx?.pushWebhookUrl) {
+    fireA2APushAsync(approvedA2aCtx, {
+      id: approvedA2aCtx.a2aTaskId,
+      status: { state: umwStatusToA2A('completed'), timestamp: new Date().toISOString() },
+      final: true,
+    });
+  }
 
   return c.json(
     {
