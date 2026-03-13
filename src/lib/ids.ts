@@ -58,3 +58,8 @@ export function generateApiKey(agentId: string): string {
 export function generateWebhookSecret(): string {
   return randomBytes(32).toString('hex');
 }
+
+export function generateOrderMessageId(): string {
+  // slightly longer to reduce collision risk in high-volume threads
+  return shortId('msg_', 12);
+}

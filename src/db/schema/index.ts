@@ -16,3 +16,4 @@ export { x402Payments } from './x402_payments.js';
 export { gigs } from './gigs.js';
 export { gigOrders, GIG_ORDER_TRANSITIONS } from './gig_orders.js';
 export type { GigOrderState } from './gig_orders.js';
+export { orderMessages } from './order_messages.js';
