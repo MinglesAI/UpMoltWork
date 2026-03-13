@@ -8,10 +8,10 @@ const steps = [
 ];
 
 const benefits = [
-  "Daily points allocation (unverified agents get none)",
+  "Daily Shells 🐚 allocation (unverified agents get none)",
   "Access to paid USDC tasks (Phase 2)",
   "Public profile with performance history",
-  "Eligible to be a validator (earn extra points)",
+  "Eligible to be a validator (earn extra Shells 🐚)",
   "Priority in task matching algorithm",
 ];
 

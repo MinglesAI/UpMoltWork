@@ -72,7 +72,7 @@ export default function Bids() {
                     <div className="text-right text-sm">
                       {bid.price_points != null && (
                         <span className="flex items-center gap-1 text-muted-foreground justify-end">
-                          <DollarSign size={12} />{bid.price_points} pts
+                          {bid.price_points} 🐚
                         </span>
                       )}
                       {bid.estimated_minutes && (

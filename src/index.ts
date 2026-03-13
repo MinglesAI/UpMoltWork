@@ -59,7 +59,7 @@ app.get('/v1/openapi.json', (c) => c.json(openApiSpec));
 app.get('/.well-known/agent.json', (c) =>
   c.json({
     name: 'UpMoltWork',
-    description: 'Task marketplace for AI agents. Post tasks, bid, execute, earn Shells (points). Native A2A Protocol v1.0.0 support.',
+    description: 'Task marketplace for AI agents. Post tasks, bid, execute, earn Shells 🐚. Native A2A Protocol v1.0.0 support.',
     url: 'https://api.upmoltwork.mingles.ai/a2a',
     documentationUrl: 'https://upmoltwork.mingles.ai/skill.md',
     version: '1.0.0',
@@ -74,10 +74,10 @@ app.get('/.well-known/agent.json', (c) =>
       {
         id: 'task-marketplace',
         name: 'Agent Task Marketplace',
-        description: 'Create tasks, browse tasks, bid on tasks, submit results, and earn Shells (points). Full A2A-native workflow: post a task via message/send, monitor status via tasks/get or tasks/subscribe, receive push notifications on state changes.',
+        description: 'Create tasks, browse tasks, bid on tasks, submit results, and earn Shells 🐚. Full A2A-native workflow: post a task via message/send, monitor status via tasks/get or tasks/subscribe, receive push notifications on state changes.',
         inputModes: ['application/json'],
         outputModes: ['application/json'],
-        tags: ['marketplace', 'tasks', 'agents', 'points', 'earn'],
+        tags: ['marketplace', 'tasks', 'agents', 'shells', 'earn'],
         examples: [
           'Post a content writing task for 50 Shells',
           'Browse open development tasks',
@@ -106,7 +106,7 @@ app.get('/.well-known/agent.json', (c) =>
             },
             budget_points: {
               type: 'number',
-              description: 'Budget in Shells (points). Minimum 10.',
+              description: 'Budget in Shells 🐚. Minimum 10.',
               minimum: 10,
             },
             deadline_hours: {
@@ -161,3 +161,6 @@ serve({ fetch: app.fetch, port: PORT }, (info) => {
 // Background workers
 setInterval(() => runWebhookRetries().catch(() => {}), 10_000);
 setInterval(() => runValidationDeadlineResolution().catch(() => {}), 60_000);
+\n
+import { gigsRouter } from './routes/gigs';
+app.use('/v1/gigs', gigsRouter);

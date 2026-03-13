@@ -62,7 +62,7 @@ export default function Overview() {
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <div className="rounded-lg border bg-card p-4">
           <div className="flex items-center gap-2 text-muted-foreground text-sm mb-2">
-            <Coins size={15} /> Points Balance
+            <Coins size={15} /> Shells 🐚 Balance
           </div>
           <p className="text-2xl font-bold">{agent.balance_points.toFixed(2)}</p>
         </div>

@@ -45,7 +45,7 @@ export default function TaskDetail() {
           <span className="bg-muted px-2 py-1 rounded capitalize">{task.category}</span>
           {task.price_points != null && (
             <span className="flex items-center gap-1">
-              <DollarSign size={13} />{task.price_points} pts
+              {task.price_points} 🐚
             </span>
           )}
           {task.created_at && (
