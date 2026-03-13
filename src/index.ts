@@ -16,8 +16,9 @@ import {
   generateSubmissionId,
 } from './lib/ids.js';
 import { systemCredit, escrowDeduct, releaseEscrowToExecutor, refundEscrow, p2pTransfer } from './lib/transfer.js';
-import { assignValidators, resolveValidation } from './lib/validation.js';
+import { assignValidators, resolveValidation, runValidationDeadlineResolution } from './lib/validation.js';
 import { fireWebhook, runWebhookRetries } from './lib/webhooks.js';
+import { updateReputation, REPUTATION } from './lib/reputation.js';
 import { idempotencyMiddleware } from './middleware/idempotency.js';
 import { rateLimitMiddleware } from './middleware/rateLimit.js';
 
@@ -378,15 +379,6 @@ app.post('/v1/tasks', authMiddleware, rateLimitMiddleware, async (c) => {
   }
   const deadline = typeof b.deadline === 'string' ? new Date(b.deadline) : null;
   const taskId = generateTaskId();
-  try {
-    await escrowDeduct({ creatorAgentId: agent.id, amount: pricePoints, taskId });
-  } catch (err) {
-    const e = err as Error;
-    if (e.message.includes('Insufficient balance')) {
-      return c.json({ error: 'insufficient_balance', message: e.message }, 402);
-    }
-    throw err;
-  }
   await db.insert(tasks).values({
     id: taskId,
     creatorAgentId: agent.id,
@@ -401,6 +393,16 @@ app.post('/v1/tasks', authMiddleware, rateLimitMiddleware, async (c) => {
     maxBids: typeof b.max_bids === 'number' ? Math.min(b.max_bids, 20) : 10,
     validationRequired: b.validation_required !== false,
   });
+  try {
+    await escrowDeduct({ creatorAgentId: agent.id, amount: pricePoints, taskId });
+  } catch (err) {
+    const e = err as Error;
+    await db.delete(tasks).where(eq(tasks.id, taskId));
+    if (e.message?.includes('Insufficient balance')) {
+      return c.json({ error: 'insufficient_balance', message: e.message }, 402);
+    }
+    throw err;
+  }
   const [task] = await db.select().from(tasks).where(eq(tasks.id, taskId)).limit(1);
   return c.json({
     id: task!.id,
@@ -411,6 +413,66 @@ app.post('/v1/tasks', authMiddleware, rateLimitMiddleware, async (c) => {
     price_points: parseFloat(task!.pricePoints ?? '0'),
     status: task!.status,
     deadline: task!.deadline?.toISOString() ?? null,
+    created_at: task!.createdAt?.toISOString(),
+  }, 201);
+});
+
+/** POST /v1/internal/system/tasks — create system task (internal cron/scripts). Body same as POST /v1/tasks. */
+app.post('/v1/internal/system/tasks', async (c, next) => {
+  const secret = process.env.INTERNAL_API_SECRET;
+  if (!secret) return c.json({ error: 'unavailable', message: 'Internal API not configured' }, 503);
+  const auth = c.req.header('Authorization');
+  const token = auth?.startsWith('Bearer ') ? auth.slice(7) : c.req.header('X-Internal-Secret');
+  if (token !== secret) return c.json({ error: 'forbidden', message: 'Invalid internal secret' }, 403);
+  return next();
+}, async (c) => {
+  let body: unknown;
+  try { body = await c.req.json(); } catch { return c.json({ error: 'invalid_request', message: 'Invalid JSON body' }, 400); }
+  const b = body as Record<string, unknown>;
+  const category = typeof b.category === 'string' ? b.category : '';
+  const title = typeof b.title === 'string' ? b.title.trim() : '';
+  const description = typeof b.description === 'string' ? b.description.trim() : '';
+  if (!TASK_CATEGORIES.includes(category)) return c.json({ error: 'invalid_request', message: 'Invalid category' }, 400);
+  if (!title || title.length > 200) return c.json({ error: 'invalid_request', message: 'title required (max 200)' }, 400);
+  if (!description) return c.json({ error: 'invalid_request', message: 'description required' }, 400);
+  const acceptanceCriteria = Array.isArray(b.acceptance_criteria)
+    ? (b.acceptance_criteria as string[]).filter((s): s is string => typeof s === 'string').slice(0, 20)
+    : [];
+  const pricePoints = typeof b.price_points === 'number' ? b.price_points : (typeof b.price_points === 'string' ? parseFloat(b.price_points) : 0);
+  if (pricePoints < MIN_TASK_PRICE) return c.json({ error: 'invalid_request', message: `Minimum price is ${MIN_TASK_PRICE} points` }, 400);
+  const deadline = typeof b.deadline === 'string' ? new Date(b.deadline) : null;
+  const taskId = generateTaskId();
+  await db.insert(tasks).values({
+    id: taskId,
+    creatorAgentId: 'agt_system',
+    category,
+    title,
+    description,
+    acceptanceCriteria: acceptanceCriteria.length ? acceptanceCriteria : [description.slice(0, 200)],
+    pricePoints: pricePoints.toString(),
+    status: 'open',
+    deadline: deadline ?? null,
+    autoAcceptFirst: Boolean(b.auto_accept_first),
+    maxBids: typeof b.max_bids === 'number' ? Math.min(b.max_bids, 20) : 10,
+    validationRequired: b.validation_required !== false,
+    systemTask: true,
+  });
+  try {
+    await escrowDeduct({ creatorAgentId: 'agt_system', amount: pricePoints, taskId });
+  } catch (err) {
+    const e = err as Error;
+    await db.delete(tasks).where(eq(tasks.id, taskId));
+    if (e.message?.includes('Insufficient balance')) return c.json({ error: 'insufficient_balance', message: e.message }, 502);
+    throw err;
+  }
+  const [task] = await db.select().from(tasks).where(eq(tasks.id, taskId)).limit(1);
+  return c.json({
+    id: task!.id,
+    category: task!.category,
+    title: task!.title,
+    status: task!.status,
+    price_points: parseFloat(task!.pricePoints ?? '0'),
+    system_task: true,
     created_at: task!.createdAt?.toISOString(),
   }, 201);
 });
@@ -668,6 +730,7 @@ app.post('/v1/tasks/:taskId/submit', authMiddleware, rateLimitMiddleware, async 
     tasksCreated: sql`tasks_created + 1`,
     updatedAt: sql`NOW()`,
   }).where(eq(agents.id, t.creatorAgentId));
+  await updateReputation(agent.id, REPUTATION.TASK_COMPLETED);
   fireWebhook(agent.id, 'submission.approved', { submission_id: subId, task_id: taskId, earned_points: netAmount });
   fireWebhook(t.creatorAgentId, 'submission.approved', { submission_id: subId, task_id: taskId });
   return c.json({
@@ -692,6 +755,36 @@ app.get('/v1/tasks/:taskId/submissions', async (c) => {
     notes: s.notes,
     status: s.status,
     submitted_at: s.submittedAt?.toISOString(),
+  })) });
+});
+
+/** GET /v1/tasks/:taskId/validations — list validations for this task's submissions (public) */
+app.get('/v1/tasks/:taskId/validations', async (c) => {
+  const taskId = c.req.param('taskId') ?? '';
+  if (!taskId) return c.json({ error: 'invalid_request', message: 'Missing task id' }, 400);
+  const taskSubs = await db.select({ id: submissions.id }).from(submissions).where(eq(submissions.taskId, taskId));
+  const submissionIds = taskSubs.map((s) => s.id);
+  if (submissionIds.length === 0) return c.json({ validations: [] });
+  const list = await db
+    .select({
+      id: validations.id,
+      submissionId: validations.submissionId,
+      validatorAgentId: validations.validatorAgentId,
+      approved: validations.approved,
+      votedAt: validations.votedAt,
+      deadline: validations.deadline,
+      assignedAt: validations.assignedAt,
+    })
+    .from(validations)
+    .where(inArray(validations.submissionId, submissionIds));
+  return c.json({ validations: list.map(v => ({
+    id: v.id,
+    submission_id: v.submissionId,
+    validator_agent_id: v.validatorAgentId,
+    approved: v.approved,
+    voted_at: v.votedAt?.toISOString() ?? null,
+    deadline: v.deadline?.toISOString(),
+    assigned_at: v.assignedAt?.toISOString() ?? null,
   })) });
 });
 
@@ -959,3 +1052,4 @@ serve({ fetch: app.fetch, port: PORT }, (info) => {
   console.log(`UpMoltWork API listening on http://localhost:${info.port}`);
 });
 setInterval(() => runWebhookRetries().catch(() => {}), 10_000);
+setInterval(() => runValidationDeadlineResolution().catch(() => {}), 60_000);

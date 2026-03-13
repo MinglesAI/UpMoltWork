@@ -1,9 +1,10 @@
-import { eq, and, sql } from 'drizzle-orm';
+import { eq, and, sql, isNotNull } from 'drizzle-orm';
 import { db } from '../db/pool.js';
 import { agents, validations, submissions, tasks } from '../db/schema/index.js';
 import { releaseEscrowToExecutor, refundEscrow, systemCredit } from './transfer.js';
 import { generateValidationId } from './ids.js';
 import { fireWebhook } from './webhooks.js';
+import { updateReputation, REPUTATION } from './reputation.js';
 
 const VALIDATION_DEADLINE_HOURS = 48;
 const VALIDATOR_REWARD = 5;
@@ -60,23 +61,35 @@ export async function assignValidators(opts: {
 
 /**
  * Check votes for a submission and resolve if 2-of-3 reached (approve or reject).
- * Pays executor or refunds creator; pays validators 5 points each.
+ * Counts timeouts (approved IS NULL and voted_at set by cron). Auto-approve if 1 approve + 2 timeout.
  */
 export async function resolveValidation(submissionId: string): Promise<'resolved' | 'pending'> {
   const rows = await db
-    .select({ approved: validations.approved, validatorAgentId: validations.validatorAgentId })
+    .select({
+      approved: validations.approved,
+      validatorAgentId: validations.validatorAgentId,
+      votedAt: validations.votedAt,
+    })
     .from(validations)
     .where(eq(validations.submissionId, submissionId));
 
-  const voted = rows.filter((r) => r.approved !== null);
-  const approved = voted.filter((r) => r.approved === true).length;
-  const rejected = voted.filter((r) => r.approved === false).length;
+  const approvedCount = rows.filter((r) => r.approved === true).length;
+  const rejectedCount = rows.filter((r) => r.approved === false).length;
+  const timeoutCount = rows.filter((r) => r.approved === null && r.votedAt != null).length;
 
-  if (approved >= REQUIRED_APPROVALS) {
+  if (approvedCount >= REQUIRED_APPROVALS) {
     await applyApproval(submissionId);
     return 'resolved';
   }
-  if (rejected >= REQUIRED_REJECTIONS) {
+  if (rejectedCount >= REQUIRED_REJECTIONS) {
+    await applyRejection(submissionId);
+    return 'resolved';
+  }
+  if (approvedCount === 1 && timeoutCount >= 2) {
+    await applyApproval(submissionId);
+    return 'resolved';
+  }
+  if (rejectedCount + timeoutCount >= 2 && approvedCount < 2) {
     await applyRejection(submissionId);
     return 'resolved';
   }
@@ -104,6 +117,7 @@ async function applyApproval(submissionId: string): Promise<void> {
     tasksCreated: sql`tasks_created + 1`,
     updatedAt: sql`NOW()`,
   }).where(eq(agents.id, t.creatorAgentId));
+  await updateReputation(sub.agentId, REPUTATION.TASK_COMPLETED);
   const votedValidators = await db
     .select({ validatorAgentId: validations.validatorAgentId })
     .from(validations)
@@ -115,7 +129,9 @@ async function applyApproval(submissionId: string): Promise<void> {
       type: 'validation_reward',
       memo: `Validation for ${submissionId}`,
     });
+    await updateReputation(v.validatorAgentId, REPUTATION.VALIDATOR_GOOD);
   }
+  await applyTimeoutPenalties(submissionId);
   fireWebhook(sub.agentId, 'submission.approved', { submission_id: submissionId, task_id: sub.taskId });
   fireWebhook(t.creatorAgentId, 'submission.approved', { submission_id: submissionId, task_id: sub.taskId });
 }
@@ -128,7 +144,33 @@ async function applyRejection(submissionId: string): Promise<void> {
   const price = parseFloat(t.pricePoints ?? '0');
   await db.update(submissions).set({ status: 'rejected' }).where(eq(submissions.id, submissionId));
   await db.update(tasks).set({ status: 'open', executorAgentId: null, updatedAt: new Date() }).where(eq(tasks.id, sub.taskId));
+  await updateReputation(sub.agentId, REPUTATION.VALIDATION_FAILED);
+  await applyTimeoutPenalties(submissionId);
   await refundEscrow({ creatorAgentId: t.creatorAgentId, amount: price, taskId: sub.taskId });
   fireWebhook(sub.agentId, 'submission.rejected', { submission_id: submissionId, task_id: sub.taskId });
   fireWebhook(t.creatorAgentId, 'submission.rejected', { submission_id: submissionId, task_id: sub.taskId });
+}
+
+async function applyTimeoutPenalties(submissionId: string): Promise<void> {
+  const timeouts = await db
+    .select({ validatorAgentId: validations.validatorAgentId })
+    .from(validations)
+    .where(and(eq(validations.submissionId, submissionId), sql`${validations.approved} IS NULL`, isNotNull(validations.votedAt)));
+  for (const r of timeouts) {
+    await updateReputation(r.validatorAgentId, REPUTATION.VALIDATOR_TIMEOUT);
+  }
+}
+
+/**
+ * Resolve submissions that are still 'validating' and whose validation deadline has passed.
+ * Cron sets voted_at on timed-out validations; this runs resolveValidation so e.g. 0 approve + 3 timeout → reject.
+ */
+export async function runValidationDeadlineResolution(): Promise<void> {
+  const now = new Date();
+  const subs = await db.select({ id: submissions.id }).from(submissions).where(eq(submissions.status, 'validating'));
+  for (const { id: submissionId } of subs) {
+    const vals = await db.select({ deadline: validations.deadline }).from(validations).where(eq(validations.submissionId, submissionId));
+    const allExpired = vals.length > 0 && vals.every((v) => v.deadline && v.deadline <= now);
+    if (allExpired) await resolveValidation(submissionId);
+  }
 }

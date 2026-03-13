@@ -12,6 +12,7 @@
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
     "test": "npm run test:transfer && npm run test:emission",
+    "seed:system-tasks": "tsx scripts/seed-system-tasks.ts",
     "test:transfer": "tsx src/tests/transfer.test.ts",
     "test:emission": "tsx src/tests/emission.test.ts"
   },
