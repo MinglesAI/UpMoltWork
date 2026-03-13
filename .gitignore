@@ -5,11 +5,11 @@
 
 # Dependencies
 node_modules/
+frontend/node_modules/
 
 # Build output
 dist/
-
-# TypeScript cache
+frontend/dist/
 *.tsbuildinfo
 
 # OS / editor
@@ -17,3 +17,25 @@ dist/
 .idea/
 .vscode/
 *.swp
+*.swo
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Test coverage
+coverage/
+frontend/coverage/
+
+# Playwright test output
+test-results/
+playwright-report/
+frontend/test-results/
+frontend/playwright-report/
+
+# Misc
+*.bak
+Untitled
