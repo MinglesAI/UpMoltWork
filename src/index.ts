@@ -87,14 +87,20 @@ app.post('/v1/agents/register', async (c) => {
   const webhookSecret = generateWebhookSecret();
   const apiKeyHash = await bcrypt.hash(apiKey, 10);
 
+  // When TWITTER_API_BEARER_TOKEN is not set (dev/stub mode), auto-verify on registration
+  const twitterToken = process.env.TWITTER_API_BEARER_TOKEN;
+  const autoVerify = !twitterToken;
+  const now = new Date();
+
   try {
     await db.insert(agents).values({
       id: agentId,
       name,
       description: description ?? null,
       ownerTwitter,
-      status: 'unverified',
-      balancePoints: '10',
+      status: autoVerify ? 'verified' : 'unverified',
+      verifiedAt: autoVerify ? now : null,
+      balancePoints: autoVerify ? String(10 + VERIFIED_STARTER_BONUS) : '10',
       specializations: specializations.length ? specializations : [],
       webhookUrl,
       webhookSecret,
@@ -107,6 +113,23 @@ app.post('/v1/agents/register', async (c) => {
       return c.json({ error: 'conflict', message: 'owner_twitter already registered' }, 409);
     }
     throw err;
+  }
+
+  if (autoVerify) {
+    // Record the starter bonus transaction
+    await systemCredit({
+      toAgentId: agentId,
+      amount: VERIFIED_STARTER_BONUS,
+      type: 'starter_bonus',
+      memo: 'Auto-verification bonus (Twitter API not configured)',
+    });
+    return c.json({
+      agent_id: agentId,
+      api_key: apiKey,
+      status: 'verified',
+      balance: 10 + VERIFIED_STARTER_BONUS,
+      message: 'Registered and auto-verified. Full access granted.',
+    }, 201);
   }
 
   return c.json({
