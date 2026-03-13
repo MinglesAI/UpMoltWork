@@ -296,3 +296,110 @@ export async function refundEscrow(opts: {
     }).where(eq(agents.id, creatorAgentId));
   });
 }
+
+// ---------------------------------------------------------------------------
+// Gig Order Escrow
+// ---------------------------------------------------------------------------
+
+/**
+ * Escrow: deduct full gig price from buyer and credit to system.
+ * Called when a gig order is placed.
+ */
+export async function escrowDeductForOrder(opts: {
+  buyerAgentId: string;
+  amount: number;
+  orderId: string;
+}): Promise<void> {
+  const { buyerAgentId, amount, orderId } = opts;
+  await dbDirect.transaction(async (tx) => {
+    const [sender] = await tx
+      .select({ id: agents.id, balance: agents.balancePoints })
+      .from(agents)
+      .where(eq(agents.id, buyerAgentId))
+      .for('update');
+    if (!sender) throw new Error(`Agent not found: ${buyerAgentId}`);
+    const current = parseFloat(sender.balance ?? '0');
+    if (current < amount) throw new Error(`Insufficient balance: need ${amount}, have ${current}`);
+    await tx.insert(transactions).values({
+      fromAgentId: buyerAgentId,
+      toAgentId: SYSTEM_AGENT_ID,
+      amount: amount.toString(),
+      currency: 'points',
+      type: 'escrow',
+      memo: `Escrow for gig order ${orderId}`,
+    });
+    await tx.update(agents).set({
+      balancePoints: sql`balance_points - ${amount}`,
+      updatedAt: sql`NOW()`,
+    }).where(eq(agents.id, buyerAgentId));
+    await tx.update(agents).set({
+      balancePoints: sql`balance_points + ${amount}`,
+      updatedAt: sql`NOW()`,
+    }).where(eq(agents.id, SYSTEM_AGENT_ID));
+  });
+}
+
+/**
+ * Release escrowed gig order payment to seller (95%) with 5% platform fee.
+ * Called when an order is completed.
+ */
+export async function releaseEscrowForOrder(opts: {
+  orderId: string;
+  sellerAgentId: string;
+  totalAmount: number;
+}): Promise<{ netAmount: number; platformFee: number }> {
+  const { orderId, sellerAgentId, totalAmount } = opts;
+  const netAmount = parseFloat((totalAmount * (1 - PLATFORM_FEE_RATE)).toFixed(2));
+  const platformFee = parseFloat((totalAmount * PLATFORM_FEE_RATE).toFixed(2));
+  await dbDirect.transaction(async (tx) => {
+    // Debit full amount from system escrow
+    await tx.update(agents).set({
+      balancePoints: sql`balance_points - ${totalAmount}`,
+      updatedAt: sql`NOW()`,
+    }).where(eq(agents.id, SYSTEM_AGENT_ID));
+    // Credit net to seller
+    await tx.insert(transactions).values({
+      fromAgentId: SYSTEM_AGENT_ID,
+      toAgentId: sellerAgentId,
+      amount: netAmount.toString(),
+      currency: 'points',
+      type: 'task_payment',
+      memo: `Payment for gig order ${orderId}`,
+    });
+    await tx.update(agents).set({
+      balancePoints: sql`balance_points + ${netAmount}`,
+      updatedAt: sql`NOW()`,
+    }).where(eq(agents.id, sellerAgentId));
+  });
+  return { netAmount, platformFee };
+}
+
+/**
+ * Refund escrowed gig order payment back to buyer.
+ * Called when an order is cancelled before completion.
+ */
+export async function refundEscrowForOrder(opts: {
+  buyerAgentId: string;
+  amount: number;
+  orderId: string;
+}): Promise<void> {
+  const { buyerAgentId, amount, orderId } = opts;
+  await dbDirect.transaction(async (tx) => {
+    await tx.insert(transactions).values({
+      fromAgentId: SYSTEM_AGENT_ID,
+      toAgentId: buyerAgentId,
+      amount: amount.toString(),
+      currency: 'points',
+      type: 'refund',
+      memo: `Refund for cancelled gig order ${orderId}`,
+    });
+    await tx.update(agents).set({
+      balancePoints: sql`balance_points - ${amount}`,
+      updatedAt: sql`NOW()`,
+    }).where(eq(agents.id, SYSTEM_AGENT_ID));
+    await tx.update(agents).set({
+      balancePoints: sql`balance_points + ${amount}`,
+      updatedAt: sql`NOW()`,
+    }).where(eq(agents.id, buyerAgentId));
+  });
+}
