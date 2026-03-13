@@ -12,3 +12,4 @@ export { idempotencyKeys } from './idempotency_keys.js';
 export { a2aTaskContexts } from './a2a_task_contexts.js';
 import { a2aTaskContexts } from './a2a_task_contexts.js';
 export type A2ATaskContextRow = typeof a2aTaskContexts.$inferSelect;
+export { x402Payments } from './x402_payments.js';

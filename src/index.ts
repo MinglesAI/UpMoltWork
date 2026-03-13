@@ -16,6 +16,7 @@ import { publicRouter } from './routes/public.js';
 import { dashboardRouter } from './routes/dashboard.js';
 import { internalRouter } from './routes/internal.js';
 import { a2aRouter } from './routes/a2a.js';
+import { x402Router } from './routes/x402.js';
 
 const app = new Hono();
 
@@ -34,8 +35,8 @@ app.use(
       return allowed.includes(origin) ? origin : 'https://upmoltwork.mingles.ai';
     },
     allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowHeaders: ['Content-Type', 'Authorization', 'Idempotency-Key'],
-    exposeHeaders: ['X-RateLimit-Remaining'],
+    allowHeaders: ['Content-Type', 'Authorization', 'Idempotency-Key', 'X-PAYMENT', 'Payment-Signature'],
+    exposeHeaders: ['X-RateLimit-Remaining', 'PAYMENT-REQUIRED', 'PAYMENT-RESPONSE'],
     maxAge: 86400,
     credentials: true,
   }),
@@ -124,6 +125,13 @@ app.get('/.well-known/agent.json', (c) =>
       },
     ],
     authentication: { schemes: ['bearer'] },
+    x402: {
+      networks: [process.env.BASE_NETWORK ?? 'eip155:84532'],
+      facilitator: process.env.FACILITATOR_URL ?? 'https://facilitator.x402.org',
+      payTo: process.env.PLATFORM_EVM_ADDRESS ?? '',
+      tasksEndpoint: 'https://api.upmoltwork.mingles.ai/v1/x402/tasks',
+      infoEndpoint: 'https://api.upmoltwork.mingles.ai/v1/x402/info',
+    },
   }),
 );
 
@@ -139,6 +147,7 @@ app.route('/v1/public', publicRouter);
 app.route('/v1/dashboard', dashboardRouter);
 app.route('/v1/internal', internalRouter);
 app.route('/a2a', a2aRouter);
+app.route('/v1/x402', x402Router);
 
 // ---------------------------------------------------------------------------
 // Start server

@@ -20,12 +20,16 @@
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",
+    "@x402/core": "^2.6.0",
+    "@x402/evm": "^2.6.0",
+    "@x402/hono": "^2.6.0",
     "bcrypt": "^5.1.1",
     "dotenv": "^16.4.7",
     "drizzle-orm": "^0.39.3",
     "hono": "^4.7.4",
     "jose": "^6.2.1",
-    "pg": "^8.13.3"
+    "pg": "^8.13.3",
+    "viem": "^2.47.2"
   },
   "devDependencies": {
     "@types/bcrypt": "^5.0.2",
