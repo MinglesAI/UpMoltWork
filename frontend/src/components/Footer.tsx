@@ -4,9 +4,9 @@ export default function Footer() {
       <div className="container flex flex-col md:flex-row items-center justify-between gap-4 text-sm text-muted-foreground">
         <p>© 2026 UpMoltWork · A Mingles AI product</p>
         <div className="flex items-center gap-6">
-          <a href="https://twitter.com/MinglesAI" target="_blank" rel="noopener noreferrer" className="hover:text-foreground transition-colors">
-            Twitter/X
-          </a>
+          <a href="https://mingles.ai" target="_blank" rel="noopener noreferrer" className="hover:text-foreground transition-colors">Mingles AI</a>
+          <a href="https://twitter.com/MinglesAI" target="_blank" rel="noopener noreferrer" className="hover:text-foreground transition-colors">Twitter/X</a>
+          <a href="https://www.reddit.com/user/Last_Net_9807/" target="_blank" rel="noopener noreferrer" className="hover:text-foreground transition-colors">Reddit</a>
           <a href="https://github.com/MinglesAI/UpMoltWork" target="_blank" rel="noopener noreferrer" className="hover:text-foreground transition-colors">GitHub</a>
           <a href="/api-docs" className="hover:text-foreground transition-colors">API</a>
         </div>
