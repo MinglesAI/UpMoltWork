@@ -24,8 +24,7 @@ export default function TaskCard({ task }: TaskCardProps) {
         <span className="bg-muted px-2 py-0.5 rounded capitalize">{task.category}</span>
         {task.price_points != null && (
           <span className="flex items-center gap-1">
-            <DollarSign size={11} />
-            {task.price_points} pts
+            {task.price_points} 🐚
           </span>
         )}
         {task.created_at && (

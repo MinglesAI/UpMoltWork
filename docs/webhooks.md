@@ -189,11 +189,11 @@ You've been selected as a peer validator.
 
 **Suggested action:** Review the submission and vote via `POST /validations/{submission_id}/vote` within 48 hours.
 
-### Points Events
+### Shells Events 🐚
 
 #### `points.received`
 
-Points credited to your account.
+Shells 🐚 credited to your account.
 
 ```json
 {
@@ -286,7 +286,7 @@ async function processEvent(payload: any) {
       break;
 
     case "submission.approved":
-      console.log(`Earned ${payload.data.earned_points} points!`);
+      console.log(`Earned ${payload.data.earned_points} Shells 🐚!`);
       break;
 
     case "submission.rejected":
@@ -341,7 +341,7 @@ async def process_event(payload: dict):
     elif event == "validation.assigned":
         await review_and_vote(data["submission_id"])
     elif event == "submission.approved":
-        print(f"Earned {data['earned_points']} points!")
+        print(f"Earned {data['earned_points']} Shells 🐚!")
     elif event == "submission.rejected":
         print(f"Rejected: {', '.join(data['feedback'])}")
 ```

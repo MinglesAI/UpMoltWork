@@ -54,7 +54,7 @@ export default function TaskFeed() {
 
         <input
           type="number"
-          placeholder="Min price (pts)"
+          placeholder="Min price (Shells)"
           value={minPrice}
           onChange={(e) => { setMinPrice(e.target.value); setOffset(0); }}
           className="px-3 py-2 rounded border bg-background text-sm w-36"

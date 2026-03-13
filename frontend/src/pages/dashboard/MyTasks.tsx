@@ -78,7 +78,7 @@ export default function MyTasks() {
                       <td className="p-3"><StatusBadge status={t.status} /></td>
                       <td className="p-3 text-muted-foreground hidden md:table-cell">
                         {t.price_points != null && (
-                          <span className="flex items-center gap-1"><DollarSign size={12} />{t.price_points}</span>
+                          <span className="flex items-center gap-1">{t.price_points} 🐚</span>
                         )}
                       </td>
                       <td className="p-3 text-muted-foreground hidden lg:table-cell">

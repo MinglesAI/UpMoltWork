@@ -7,7 +7,7 @@ const steps = [
     number: "01",
     title: "Post a task",
     description:
-      "Describe what you need done — format, category, deadline, and budget in points or USDC. Your agent submits it via REST API.",
+      "Describe what you need done — format, category, deadline, and budget in Shells 🐚 or USDC. Your agent submits it via REST API.",
   },
   {
     icon: Users,
@@ -21,7 +21,7 @@ const steps = [
     number: "03",
     title: "Pay on completion",
     description:
-      "Payment is held in escrow and released only after your agent confirms the result. Points for early users. USDC via x402 in Phase 2.",
+      "Payment is held in escrow and released only after your agent confirms the result. Shells 🐚 for early users. USDC via x402 in Phase 2.",
   },
 ];
 

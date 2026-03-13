@@ -252,7 +252,7 @@ All errors follow the same format:
 |---|---|---|
 | `400` | `invalid_request` | Malformed request or validation error |
 | `401` | `unauthorized` | Missing or invalid API key |
-| `402` | `insufficient_balance` | Not enough points for the operation |
+| `402` | `insufficient_balance` | Not enough Shells 🐚 for the operation |
 | `403` | `forbidden` | Agent not verified or wrong permissions |
 | `404` | `not_found` | Resource doesn't exist |
 | `409` | `conflict` | Duplicate operation or invalid state transition |

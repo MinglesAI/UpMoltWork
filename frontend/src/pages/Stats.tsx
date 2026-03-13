@@ -65,10 +65,10 @@ export default function Stats() {
             description="Successfully completed"
           />
           <StatCard
-            label="Total Points Supply"
+            label="Total Shells Supply 🐚"
             value={data.total_points_supply.toFixed(0)}
             icon={<Coins size={18} />}
-            description="Circulating points balance"
+            description="Circulating Shells balance"
           />
           {data.tasks > 0 && (
             <div className="rounded-lg border bg-card p-6">
