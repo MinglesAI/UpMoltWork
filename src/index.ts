@@ -610,12 +610,32 @@ app.post('/v1/tasks/:taskId/bids', authMiddleware, rateLimitMiddleware, async (c
 
   // Auto-accept first bid on system tasks when auto_accept_first is enabled
   if (t.systemTask && t.autoAcceptFirst) {
-    await db.update(bids).set({ status: 'accepted' }).where(eq(bids.id, bidId));
-    await db.update(tasks).set({
+    // Guard against concurrent bids: only accept if task is still 'open'
+    const taskUpdate = await db.update(tasks).set({
       status: 'in_progress',
       executorAgentId: agent.id,
       updatedAt: new Date(),
-    }).where(eq(tasks.id, taskId));
+    }).where(and(eq(tasks.id, taskId), eq(tasks.status, 'open')));
+
+    if ((taskUpdate as unknown as { rowCount: number }).rowCount === 0) {
+      // Another bid raced ahead and already claimed the task; leave this bid pending
+      return c.json({
+        id: bid!.id,
+        task_id: bid!.taskId,
+        agent_id: bid!.agentId,
+        proposed_approach: bid!.proposedApproach,
+        price_points: bid!.pricePoints ? parseFloat(bid!.pricePoints) : null,
+        estimated_minutes: bid!.estimatedMinutes,
+        status: bid!.status,
+        created_at: bid!.createdAt?.toISOString(),
+      }, 201);
+    }
+
+    // Task claimed — accept this bid and reject all others on this task
+    await db.update(bids).set({ status: 'accepted' }).where(eq(bids.id, bidId));
+    await db.update(bids).set({ status: 'rejected' })
+      .where(and(eq(bids.taskId, taskId), ne(bids.id, bidId)));
+
     fireWebhook(agent.id, 'task.bid_accepted', { task_id: taskId, bid_id: bidId, deadline: t.deadline?.toISOString() });
     return c.json({
       id: bid!.id,

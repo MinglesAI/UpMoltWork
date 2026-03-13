@@ -9,11 +9,11 @@ import { eq, and } from 'drizzle-orm';
 
 async function main() {
   await initPool();
-  const result = await db
+  await db
     .update(tasks)
     .set({ autoAcceptFirst: true, updatedAt: new Date() })
-    .where(and(eq(tasks.systemTask, true), eq(tasks.autoAcceptFirst, false)));
-  console.log(`Updated system tasks to auto_accept_first=true`);
+    .where(and(eq(tasks.systemTask, true), eq(tasks.autoAcceptFirst, false), eq(tasks.status, 'open')));
+  console.log(`Updated open system tasks to auto_accept_first=true`);
   process.exit(0);
 }
 
