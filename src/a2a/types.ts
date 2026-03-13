@@ -32,7 +32,7 @@ export type A2APart = TextPart | DataPart | FilePart;
 export interface A2AMessage {
   role: 'user' | 'agent';
   parts: A2APart[];
-  messageId?: string;
+  messageId: string;   // REQUIRED per spec (auto-generated if not supplied by client)
   contextId?: string;
   taskId?: string;
   metadata?: Record<string, unknown>;
@@ -155,17 +155,29 @@ export interface SetPushNotificationParams {
   pushNotificationConfig: PushNotificationConfig;
 }
 
+export interface GetPushNotificationParams {
+  id: string;
+}
+
 // --- Events (SSE) ---
 
+/**
+ * TaskStatusUpdateEvent — emitted when task status changes.
+ * Per A2A spec: field `taskId` (not `id`), `contextId` required.
+ * The `final` flag is an UpMoltWork extension (not in spec) that helps
+ * clients know when the stream will close; it is safe to ignore.
+ */
 export interface TaskStatusUpdateEvent {
-  id: string;
+  taskId: string;       // A2A spec field (was `id` in pre-1.0 drafts)
+  contextId?: string;   // A2A spec field
   status: A2ATaskStatus;
-  final: boolean;
+  final: boolean;       // UMW extension: true when task reaches a terminal state
   metadata?: Record<string, unknown>;
 }
 
 export interface TaskArtifactUpdateEvent {
-  id: string;
+  taskId: string;       // A2A spec field (was `id` in pre-1.0 drafts)
+  contextId?: string;   // A2A spec field
   artifact: A2AArtifact;
   metadata?: Record<string, unknown>;
 }

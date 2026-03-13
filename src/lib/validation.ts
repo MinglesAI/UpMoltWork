@@ -141,7 +141,8 @@ async function applyApproval(submissionId: string): Promise<void> {
   const [valApprA2aCtx] = await db.select().from(a2aTaskContexts).where(eq(a2aTaskContexts.umwTaskId, sub.taskId)).limit(1);
   if (valApprA2aCtx?.pushWebhookUrl) {
     fireA2APushAsync(valApprA2aCtx, {
-      id: valApprA2aCtx.a2aTaskId,
+      taskId: valApprA2aCtx.a2aTaskId,
+      contextId: valApprA2aCtx.contextId ?? undefined,
       status: { state: umwStatusToA2A('completed'), timestamp: new Date().toISOString() },
       final: true,
     });
@@ -166,7 +167,8 @@ async function applyRejection(submissionId: string): Promise<void> {
   const [valRejA2aCtx] = await db.select().from(a2aTaskContexts).where(eq(a2aTaskContexts.umwTaskId, sub.taskId)).limit(1);
   if (valRejA2aCtx?.pushWebhookUrl) {
     fireA2APushAsync(valRejA2aCtx, {
-      id: valRejA2aCtx.a2aTaskId,
+      taskId: valRejA2aCtx.a2aTaskId,
+      contextId: valRejA2aCtx.contextId ?? undefined,
       status: { state: umwStatusToA2A('disputed'), timestamp: new Date().toISOString() },
       final: true,
     });

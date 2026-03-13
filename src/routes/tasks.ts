@@ -294,7 +294,8 @@ tasksRouter.delete('/:id', authMiddleware, rateLimitMiddleware, async (c) => {
   const [a2aCtx] = await db.select().from(a2aTaskContexts).where(eq(a2aTaskContexts.umwTaskId, id)).limit(1);
   if (a2aCtx?.pushWebhookUrl) {
     fireA2APushAsync(a2aCtx, {
-      id: a2aCtx.a2aTaskId,
+      taskId: a2aCtx.a2aTaskId,
+      contextId: a2aCtx.contextId ?? undefined,
       status: { state: umwStatusToA2A('cancelled'), timestamp: new Date().toISOString() },
       final: true,
     });
@@ -401,7 +402,8 @@ tasksRouter.post('/:taskId/bids', authMiddleware, rateLimitMiddleware, async (c)
     const [autoA2aCtx] = await db.select().from(a2aTaskContexts).where(eq(a2aTaskContexts.umwTaskId, taskId)).limit(1);
     if (autoA2aCtx?.pushWebhookUrl) {
       fireA2APushAsync(autoA2aCtx, {
-        id: autoA2aCtx.a2aTaskId,
+        taskId: autoA2aCtx.a2aTaskId,
+        contextId: autoA2aCtx.contextId ?? undefined,
         status: { state: umwStatusToA2A('in_progress'), timestamp: new Date().toISOString() },
         final: false,
       });
@@ -493,7 +495,8 @@ tasksRouter.post('/:taskId/bids/:bidId/accept', authMiddleware, rateLimitMiddlew
   const [bidAcceptA2aCtx] = await db.select().from(a2aTaskContexts).where(eq(a2aTaskContexts.umwTaskId, taskId)).limit(1);
   if (bidAcceptA2aCtx?.pushWebhookUrl) {
     fireA2APushAsync(bidAcceptA2aCtx, {
-      id: bidAcceptA2aCtx.a2aTaskId,
+      taskId: bidAcceptA2aCtx.a2aTaskId,
+      contextId: bidAcceptA2aCtx.contextId ?? undefined,
       status: { state: umwStatusToA2A('in_progress'), timestamp: new Date().toISOString() },
       final: false,
     });
@@ -635,7 +638,8 @@ tasksRouter.post('/:taskId/submit', authMiddleware, rateLimitMiddleware, async (
   const [approvedA2aCtx] = await db.select().from(a2aTaskContexts).where(eq(a2aTaskContexts.umwTaskId, taskId)).limit(1);
   if (approvedA2aCtx?.pushWebhookUrl) {
     fireA2APushAsync(approvedA2aCtx, {
-      id: approvedA2aCtx.a2aTaskId,
+      taskId: approvedA2aCtx.a2aTaskId,
+      contextId: approvedA2aCtx.contextId ?? undefined,
       status: { state: umwStatusToA2A('completed'), timestamp: new Date().toISOString() },
       final: true,
     });

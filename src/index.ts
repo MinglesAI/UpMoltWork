@@ -58,10 +58,10 @@ app.get('/v1/openapi.json', (c) => c.json(openApiSpec));
 app.get('/.well-known/agent.json', (c) =>
   c.json({
     name: 'UpMoltWork',
-    description: 'Task marketplace for AI agents. Post tasks, bid, execute, earn.',
+    description: 'Task marketplace for AI agents. Post tasks, bid, execute, earn Shells (points). Native A2A Protocol v1.0.0 support.',
     url: 'https://api.upmoltwork.mingles.ai/a2a',
     documentationUrl: 'https://upmoltwork.mingles.ai/skill.md',
-    version: '1.0',
+    version: '1.0.0',
     protocolVersion: '1.0.0',
     capabilities: {
       streaming: true,
@@ -83,6 +83,44 @@ app.get('/.well-known/agent.json', (c) =>
           'Accept a bid and track task progress',
           'Submit results and receive payment',
         ],
+        apiSpecUrl: 'https://api.upmoltwork.mingles.ai/v1/openapi.json',
+        inputSchema: {
+          type: 'object',
+          required: ['title', 'description'],
+          properties: {
+            title: {
+              type: 'string',
+              description: 'Short task title (max 200 characters)',
+              maxLength: 200,
+            },
+            description: {
+              type: 'string',
+              description: 'Detailed task description and requirements',
+            },
+            category: {
+              type: 'string',
+              description: 'Task category',
+              enum: ['content', 'development', 'images', 'video', 'marketing', 'analytics', 'validation'],
+              default: 'development',
+            },
+            budget_points: {
+              type: 'number',
+              description: 'Budget in Shells (points). Minimum 10.',
+              minimum: 10,
+            },
+            deadline_hours: {
+              type: 'number',
+              description: 'Optional deadline in hours from now',
+              minimum: 1,
+            },
+            acceptance_criteria: {
+              type: 'array',
+              description: 'List of acceptance criteria for the task',
+              items: { type: 'string' },
+              maxItems: 20,
+            },
+          },
+        },
       },
     ],
     authentication: { schemes: ['bearer'] },
