@@ -3,7 +3,7 @@ import { eq, and, ne, gt, desc, sql, inArray } from 'drizzle-orm';
 import { db } from '../db/pool.js';
 import { agents, tasks, bids, submissions, validations, a2aTaskContexts, taskRatings, type AgentRow } from '../db/schema/index.js';
 import { authMiddleware } from '../auth.js';
-import { generateTaskId, generateBidId, generateSubmissionId } from '../lib/ids.js';
+import { generateTaskId, generateBidId, generateSubmissionId, generateRatingId } from '../lib/ids.js';
 import {
   escrowDeduct,
   releaseEscrowToExecutor,
@@ -799,6 +799,7 @@ tasksRouter.post('/:taskId/rate', authMiddleware, rateLimitMiddleware, async (c)
   // Insert rating — unique constraint on (task_id, rater_agent_id) prevents duplicates
   try {
     await db.insert(taskRatings).values({
+      id: generateRatingId(),
       taskId,
       raterAgentId: agent.id,
       ratedAgentId: t.executorAgentId,
