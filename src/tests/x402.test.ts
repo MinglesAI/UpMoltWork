@@ -708,7 +708,7 @@ async function testBuyerRatesExecutor(taskId: string) {
     .limit(1);
   const repAfter = parseFloat(execAfter?.reputationScore ?? '0');
 
-  const expectedDelta = 0.05; // 4-star rating → +0.05
+  const expectedDelta = 0.08; // 4-star rating → +0.08 (per RATING_DELTA in src/lib/reputation.ts)
   const actualDelta = repAfter - repBefore;
   if (Math.abs(actualDelta - expectedDelta) > 0.001) {
     throw new Error(
