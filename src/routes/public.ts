@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { eq, ne, desc, sql, and, inArray } from 'drizzle-orm';
 import { db } from '../db/pool.js';
-import { agents, tasks, submissions, x402Payments } from '../db/schema/index.js';
+import { agents, tasks, submissions, x402Payments, transactions } from '../db/schema/index.js';
 
 export const publicRouter = new Hono();
 
@@ -50,6 +50,9 @@ publicRouter.get('/feed', async (c) => {
         category: t.category,
         title: t.title,
         price_points: t.pricePoints,
+        price_usdc: t.priceUsdc ? parseFloat(t.priceUsdc) : null,
+        payment_mode: t.paymentMode,
+        escrow_tx_hash: t.escrowTxHash ?? null,
         status: t.status,
         completed_at: t.updatedAt?.toISOString(),
         result_url: s?.resultUrl ?? null,
@@ -122,7 +125,44 @@ publicRouter.get('/stats', async (c) => {
     .where(ne(agents.id, 'agt_system'))
     .limit(1);
 
-  // x402 USDC payment stats
+  // Shells spent (sum of 'payment' type transactions)
+  const [shellsSpent] = await db
+    .select({ total: sql<string>`coalesce(sum(amount::numeric), 0)` })
+    .from(transactions)
+    .where(eq(transactions.type, 'payment'))
+    .limit(1);
+
+  // Tasks by status
+  const tasksByStatusRaw = await db
+    .select({
+      status: tasks.status,
+      count: sql<number>`count(*)`,
+    })
+    .from(tasks)
+    .groupBy(tasks.status);
+
+  const tasksByStatus: Record<string, number> = {
+    open: 0,
+    in_progress: 0,
+    completed: 0,
+    cancelled: 0,
+  };
+  for (const row of tasksByStatusRaw) {
+    if (row.status && row.status in tasksByStatus) {
+      tasksByStatus[row.status] = Number(row.count);
+    }
+  }
+
+  // Average task price (points and USDC)
+  const [avgPricesRaw] = await db
+    .select({
+      avg_points: sql<string>`coalesce(avg(price_points::numeric) filter (where payment_mode = 'points'), 0)`,
+      avg_usdc: sql<string>`coalesce(avg(price_usdc::numeric) filter (where payment_mode = 'usdc'), 0)`,
+    })
+    .from(tasks)
+    .limit(1);
+
+  // x402 USDC payment stats — total
   const [usdcTasksCount] = await db
     .select({ n: sql<number>`count(*)` })
     .from(tasks)
@@ -145,17 +185,51 @@ publicRouter.get('/stats', async (c) => {
     .from(x402Payments)
     .limit(1);
 
+  // x402 USDC payment stats — per network
+  const networkStatsRaw = await db
+    .select({
+      network: x402Payments.network,
+      usdc_tasks: sql<number>`count(distinct task_id)`,
+      total_usdc_volume: sql<string>`coalesce(sum(case when payment_type in ('escrow', 'payout') then amount_usdc::numeric else 0 end), 0)`,
+      unique_payers: sql<number>`count(distinct payer_address)`,
+      unique_recipients: sql<number>`count(distinct recipient_address)`,
+    })
+    .from(x402Payments)
+    .groupBy(x402Payments.network);
+
+  const networks: Record<string, {
+    usdc_tasks: number;
+    total_usdc_volume: number;
+    unique_payers: number;
+    unique_recipients: number;
+  }> = {};
+  for (const row of networkStatsRaw) {
+    networks[row.network] = {
+      usdc_tasks: Number(row.usdc_tasks),
+      total_usdc_volume: parseFloat(String(row.total_usdc_volume ?? '0')),
+      unique_payers: Number(row.unique_payers),
+      unique_recipients: Number(row.unique_recipients),
+    };
+  }
+
   return c.json({
     agents: Number((agentsCount as { n: number })?.n ?? 0),
     verified_agents: Number((verifiedCount as { n: number })?.n ?? 0),
     tasks: Number((tasksCount as { n: number })?.n ?? 0),
     tasks_completed: Number((completedCount as { n: number })?.n ?? 0),
     total_points_supply: parseFloat(String((supply as { total: string })?.total ?? '0')),
+    shells_spent: parseFloat(String((shellsSpent as { total: string })?.total ?? '0')),
+    tasks_by_status: tasksByStatus,
+    avg_price_points: parseFloat(String((avgPricesRaw as { avg_points: string; avg_usdc: string })?.avg_points ?? '0')),
+    avg_price_usdc: parseFloat(String((avgPricesRaw as { avg_points: string; avg_usdc: string })?.avg_usdc ?? '0')),
     x402: {
-      usdc_tasks: Number((usdcTasksCount as { n: number })?.n ?? 0),
-      total_usdc_volume: parseFloat(String((usdcVolume as { total: string })?.total ?? '0')),
-      unique_payers: Number((uniquePayers as { n: number })?.n ?? 0),
-      unique_recipients: Number((uniqueRecipients as { n: number })?.n ?? 0),
+      networks,
+      total: {
+        usdc_tasks: Number((usdcTasksCount as { n: number })?.n ?? 0),
+        total_usdc_volume: parseFloat(String((usdcVolume as { total: string })?.total ?? '0')),
+        unique_payers: Number((uniquePayers as { n: number })?.n ?? 0),
+        unique_recipients: Number((uniqueRecipients as { n: number })?.n ?? 0),
+      },
     },
   });
 });

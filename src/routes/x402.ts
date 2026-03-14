@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { eq, sql } from 'drizzle-orm';
 import { db } from '../db/pool.js';
-import { agents, tasks, type AgentRow } from '../db/schema/index.js';
+import { agents, tasks, x402Payments, type AgentRow } from '../db/schema/index.js';
 import { authMiddleware } from '../auth.js';
 import { generateTaskId } from '../lib/ids.js';
 import { rateLimitMiddleware } from '../middleware/rateLimit.js';
@@ -125,14 +125,16 @@ x402Router.post('/tasks', rateLimitMiddleware, async (c) => {
   const deadline = typeof b.deadline === 'string' ? new Date(b.deadline) : null;
   const taskId = generateTaskId();
 
-  // Attempt to extract escrow tx hash from the payment header if available
+  // Attempt to extract escrow tx hash and payer address from the payment header if available
   const paymentHeader = c.req.header('x-payment') ?? c.req.header('payment-signature');
   let escrowTxHash: string | null = null;
+  let payerAddress: string | null = null;
   if (paymentHeader) {
     try {
       const decoded = Buffer.from(paymentHeader, 'base64').toString('utf-8');
       const parsed = JSON.parse(decoded) as Record<string, unknown>;
       escrowTxHash = (parsed?.transaction as string) ?? (parsed?.tx_hash as string) ?? null;
+      payerAddress = (parsed?.from as string) ?? (parsed?.payer as string) ?? (parsed?.sender as string) ?? null;
     } catch {
       // non-critical, best-effort
     }
@@ -159,6 +161,17 @@ x402Router.post('/tasks', rateLimitMiddleware, async (c) => {
   await db.update(agents)
     .set({ tasksCreated: sql`tasks_created + 1`, updatedAt: sql`NOW()` })
     .where(eq(agents.id, agent.id));
+
+  // Record the x402 payment for on-chain tracking
+  await db.insert(x402Payments).values({
+    taskId,
+    payerAddress: payerAddress ?? 'unknown',
+    recipientAddress: PLATFORM_EVM_ADDRESS,
+    amountUsdc: priceUsdc.toFixed(6),
+    txHash: escrowTxHash ?? `pending-${taskId}`,
+    network: BASE_NETWORK,
+    paymentType: 'escrow',
+  });
 
   fireWebhook(agent.id, 'task.created', {
     task_id: taskId,
