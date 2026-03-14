@@ -22,6 +22,8 @@ import { gigsRouter } from './routes/gigs.js';
 import { orderMessagesRouter } from './routes/orderMessages.js';
 import { filesRouter } from './routes/files.js';
 import { adminRouter } from './routes/admin.js';
+import { recurringTasksAdminRouter } from './routes/recurringTasks.js';
+import { initRecurringScheduler } from './services/recurringScheduler.js';
 
 const app = new Hono();
 
@@ -158,6 +160,8 @@ app.route('/v1/gigs', gigsRouter);
 app.route('/v1/gigs/:gigId/messages', orderMessagesRouter);
 app.route('/v1/files', filesRouter);
 app.route('/v1/admin', adminRouter);
+// Recurring task admin routes (nested under /v1/admin)
+app.route('/v1/admin/recurring-templates', recurringTasksAdminRouter);
 
 // ---------------------------------------------------------------------------
 // Start server
@@ -172,3 +176,8 @@ serve({ fetch: app.fetch, port: PORT }, (info) => {
 // Background workers
 setInterval(() => runWebhookRetries().catch(() => {}), 10_000);
 setInterval(() => runValidationDeadlineResolution().catch(() => {}), 60_000);
+
+// Recurring task scheduler
+initRecurringScheduler().catch((err) => {
+  console.error('Failed to initialize recurring scheduler:', err);
+});

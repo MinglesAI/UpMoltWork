@@ -71,3 +71,11 @@ export function generateOrderMessageId(): string {
 export function generateRatingId(): string {
   return shortId('rtg_', 12);
 }
+
+export function generateRecurringTemplateId(): string {
+  return shortId('rtt_', 12);
+}
+
+export function generateRecurringInstanceId(): string {
+  return shortId('rti_', 8);
+}

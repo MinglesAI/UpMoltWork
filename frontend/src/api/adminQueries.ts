@@ -236,6 +236,184 @@ export function useAdminStats(token: string | null) {
   });
 }
 
+// ─── Recurring Tasks ──────────────────────────────────────────────────────────
+
+export interface AdminRecurringTemplate {
+  id: string;
+  title_template: string;
+  description_template: string;
+  category: string;
+  price_points: number;
+  mode: 'infinite' | 'periodic' | 'capped';
+  max_concurrent: number;
+  max_total: number | null;
+  completed_count: number;
+  cron_expr: string | null;
+  timezone: string | null;
+  validation_type: string;
+  validation_config: Record<string, unknown> | null;
+  enabled: boolean;
+  pause_until: string | null;
+  poster_agent_id: string | null;
+  metadata: Record<string, unknown> | null;
+  open_instances: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AdminRecurringInstance {
+  id: string;
+  template_id: string;
+  task_id: string | null;
+  posted_at: string;
+  variables: Record<string, string> | null;
+  task_status: string | null;
+  task_title: string | null;
+}
+
+export function useAdminRecurringTemplates(
+  token: string | null,
+  params: { page?: number; limit?: number } = {},
+) {
+  const qs = new URLSearchParams();
+  if (params.page) qs.set('page', String(params.page));
+  if (params.limit) qs.set('limit', String(params.limit));
+
+  return useQuery<AdminListResult<AdminRecurringTemplate>>({
+    queryKey: ['admin-recurring-templates', token, params],
+    queryFn: () => adminFetch<AdminListResult<AdminRecurringTemplate>>(`/v1/admin/recurring-templates?${qs}`, token!),
+    enabled: !!token,
+  });
+}
+
+export function useAdminRecurringInstances(
+  token: string | null,
+  templateId: string | null,
+  params: { page?: number; limit?: number } = {},
+) {
+  const qs = new URLSearchParams();
+  if (params.page) qs.set('page', String(params.page));
+  if (params.limit) qs.set('limit', String(params.limit));
+
+  return useQuery<AdminListResult<AdminRecurringInstance>>({
+    queryKey: ['admin-recurring-instances', token, templateId, params],
+    queryFn: () => adminFetch<AdminListResult<AdminRecurringInstance>>(`/v1/admin/recurring-templates/${templateId}/instances?${qs}`, token!),
+    enabled: !!token && !!templateId,
+  });
+}
+
+export async function adminToggleRecurringTemplate(
+  token: string,
+  templateId: string,
+  enabled: boolean,
+): Promise<AdminRecurringTemplate> {
+  const res = await fetch(`${BASE_URL}/v1/admin/recurring-templates/${templateId}`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ enabled }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ message: `HTTP ${res.status}` })) as { message?: string };
+    throw new Error(body.message ?? `HTTP ${res.status}`);
+  }
+  const data = await res.json() as { data: AdminRecurringTemplate };
+  return data.data;
+}
+
+export async function adminTriggerRecurringTemplate(
+  token: string,
+  templateId: string,
+): Promise<{ template_id: string; task_id: string; triggered_at: string }> {
+  const res = await fetch(`${BASE_URL}/v1/admin/recurring-templates/${templateId}/trigger`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ message: `HTTP ${res.status}` })) as { message?: string };
+    throw new Error(body.message ?? `HTTP ${res.status}`);
+  }
+  const data = await res.json() as { data: { template_id: string; task_id: string; triggered_at: string } };
+  return data.data;
+}
+
+export async function adminUpdateRecurringTemplate(
+  token: string,
+  templateId: string,
+  updates: Partial<{
+    title_template: string;
+    description_template: string;
+    category: string;
+    price_points: number;
+    mode: string;
+    max_concurrent: number;
+    max_total: number | null;
+    cron_expr: string | null;
+    timezone: string;
+    validation_type: string;
+    validation_config: Record<string, unknown> | null;
+    enabled: boolean;
+    pause_until: string | null;
+    poster_agent_id: string;
+    metadata: Record<string, unknown> | null;
+  }>,
+): Promise<AdminRecurringTemplate> {
+  const res = await fetch(`${BASE_URL}/v1/admin/recurring-templates/${templateId}`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(updates),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ message: `HTTP ${res.status}` })) as { message?: string };
+    throw new Error(body.message ?? `HTTP ${res.status}`);
+  }
+  const data = await res.json() as { data: AdminRecurringTemplate };
+  return data.data;
+}
+
+export async function adminCreateRecurringTemplate(
+  token: string,
+  payload: {
+    title_template: string;
+    description_template: string;
+    category: string;
+    price_points: number;
+    mode: string;
+    max_concurrent: number;
+    max_total?: number | null;
+    cron_expr?: string | null;
+    timezone?: string;
+    validation_type: string;
+    validation_config?: Record<string, unknown> | null;
+    enabled?: boolean;
+    poster_agent_id?: string;
+    metadata?: Record<string, unknown> | null;
+  },
+): Promise<AdminRecurringTemplate> {
+  const res = await fetch(`${BASE_URL}/v1/admin/recurring-templates`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ message: `HTTP ${res.status}` })) as { message?: string };
+    throw new Error(body.message ?? `HTTP ${res.status}`);
+  }
+  const data = await res.json() as { data: AdminRecurringTemplate };
+  return data.data;
+}
+
 // ─── CSV export helpers ───────────────────────────────────────────────────────
 
 function toCsv(rows: Record<string, unknown>[]): string {

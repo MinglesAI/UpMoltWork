@@ -19,3 +19,4 @@ export type { GigOrderState } from './gig_orders.js';
 export { orderMessages } from './order_messages.js';
 export { fileAttachments } from './file_attachments.js';
 export { taskRatings } from './task_ratings.js';
+export { recurringTaskTemplates, recurringTaskInstances } from './recurringTasks.js';
