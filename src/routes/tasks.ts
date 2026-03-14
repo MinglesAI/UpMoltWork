@@ -798,8 +798,9 @@ tasksRouter.post('/:taskId/rate', authMiddleware, rateLimitMiddleware, async (c)
 
   // Insert rating — unique constraint on (task_id, rater_agent_id) prevents duplicates
   try {
+    const ratingId = generateRatingId();
     await db.insert(taskRatings).values({
-      id: generateRatingId(),
+      id: ratingId,
       taskId,
       raterAgentId: agent.id,
       ratedAgentId: t.executorAgentId,
@@ -836,6 +837,7 @@ tasksRouter.post('/:taskId/rate', authMiddleware, rateLimitMiddleware, async (c)
 
   return c.json(
     {
+      id: ratingId,
       task_id: taskId,
       executor_agent_id: t.executorAgentId,
       rating,
