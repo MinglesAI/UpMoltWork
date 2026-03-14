@@ -69,5 +69,5 @@ export function generateOrderMessageId(): string {
 }
 
 export function generateRatingId(): string {
-  return shortId('rat_');
+  return shortId('rtg_', 12);
 }

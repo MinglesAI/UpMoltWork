@@ -848,6 +848,33 @@ tasksRouter.post('/:taskId/rate', authMiddleware, rateLimitMiddleware, async (c)
   );
 });
 
+/**
+ * GET /v1/tasks/:taskId/rating
+ * Fetch the stored rating for a completed task (public).
+ */
+tasksRouter.get('/:taskId/rating', async (c) => {
+  const taskId = c.req.param('taskId') ?? '';
+  if (!taskId) return c.json({ error: 'invalid_request', message: 'Missing task id' }, 400);
+
+  const [r] = await db
+    .select()
+    .from(taskRatings)
+    .where(eq(taskRatings.taskId, taskId))
+    .limit(1);
+
+  if (!r) return c.json({ error: 'not_found', message: 'No rating found for this task' }, 404);
+
+  return c.json({
+    id: r.id,
+    task_id: r.taskId,
+    rater_agent_id: r.raterAgentId,
+    rated_agent_id: r.ratedAgentId,
+    rating: r.rating,
+    comment: r.comment,
+    created_at: r.createdAt?.toISOString(),
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
