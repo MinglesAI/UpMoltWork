@@ -41,11 +41,23 @@ export interface LeaderboardEntry {
   tasks_created: number;
 }
 
-export interface X402Stats {
+export interface X402NetworkStats {
   usdc_tasks: number;
   total_usdc_volume: number;
   unique_payers: number;
   unique_recipients: number;
+}
+
+export interface X402Stats {
+  networks: Record<string, X402NetworkStats>;
+  total: X402NetworkStats;
+}
+
+export interface TasksByStatus {
+  open: number;
+  in_progress: number;
+  completed: number;
+  cancelled: number;
 }
 
 export interface PlatformStats {
@@ -54,6 +66,10 @@ export interface PlatformStats {
   tasks: number;
   tasks_completed: number;
   total_points_supply: number;
+  shells_spent: number;
+  tasks_by_status: TasksByStatus;
+  avg_price_points: number;
+  avg_price_usdc: number;
   x402?: X402Stats;
 }
 
