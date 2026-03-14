@@ -5,9 +5,10 @@
  * gig listings (preview images, specs) and gig order deliveries.
  *
  * Buckets:
- *   gig-files    — attachments added to gig listings (public)
- *   order-files  — delivery files uploaded by sellers (private, signed URLs)
- *   gig-attachments — general entity attachments via /v1/files API (private)
+ *   gig-files             — attachments added to gig listings (public)
+ *   order-files           — delivery files uploaded by sellers (private, signed URLs)
+ *   gig-attachments       — general entity attachments via /v1/files API (private)
+ *   order-message-files   — message-level file attachments (private)
  */
 import { createClient } from '@supabase/supabase-js';
 
@@ -17,9 +18,9 @@ import { createClient } from '@supabase/supabase-js';
 
 function getSupabaseClient() {
   const url = process.env.SUPABASE_URL;
-  const key = process.env.SUPABASE_SECRET_KEY;
+  const key = process.env.SUPABASE_SECRET_KEY ?? process.env.SUPABASE_SERVICE_KEY;
   if (!url || !key) {
-    throw new Error('SUPABASE_URL and SUPABASE_SECRET_KEY must be set');
+    throw new Error('SUPABASE_URL and SUPABASE_SECRET_KEY (or SUPABASE_SERVICE_KEY) must be set');
   }
   return createClient(url, key);
 }
@@ -31,6 +32,7 @@ function getSupabaseClient() {
 export const BUCKET_GIG_FILES = 'gig-files';
 export const BUCKET_ORDER_FILES = 'order-files';
 export const BUCKET_GIG_ATTACHMENTS = 'gig-attachments';
+export const BUCKET_ORDER_MESSAGES = 'order-message-files';
 
 // ---------------------------------------------------------------------------
 // Allowed MIME types
@@ -109,6 +111,14 @@ export function bucketForEntityType(entityType: string): string {
   }
 }
 
+/** Format byte count as a human-readable string, e.g. "2.4 MB" */
+export function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
 // ---------------------------------------------------------------------------
 // Upload
 // ---------------------------------------------------------------------------
@@ -158,6 +168,34 @@ export async function uploadFile(
   }
 
   return result;
+}
+
+/**
+ * Upload a message file attachment to the order-message-files bucket.
+ * Returns a public URL for the stored file.
+ *
+ * Kept for backward compatibility with the order messages router.
+ */
+export async function uploadMessageFile(
+  gigId: string,
+  messageId: string,
+  fileName: string,
+  buffer: ArrayBuffer,
+  mimeType: string,
+): Promise<{ url: string }> {
+  const result = await uploadFile(
+    BUCKET_ORDER_MESSAGES,
+    `gigs/${gigId}/${messageId}`,
+    fileName,
+    buffer,
+    mimeType,
+  );
+
+  // If no publicUrl (private bucket), build one manually for backward compat
+  const supabaseUrl = process.env.SUPABASE_URL;
+  if (!supabaseUrl) throw new Error('SUPABASE_URL is not configured');
+  const url = result.publicUrl ?? `${supabaseUrl}/storage/v1/object/public/${BUCKET_ORDER_MESSAGES}/${result.path}`;
+  return { url };
 }
 
 // ---------------------------------------------------------------------------
