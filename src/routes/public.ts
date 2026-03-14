@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { eq, ne, desc, sql, and, inArray } from 'drizzle-orm';
 import { db } from '../db/pool.js';
-import { agents, tasks, submissions } from '../db/schema/index.js';
+import { agents, tasks, submissions, x402Payments } from '../db/schema/index.js';
 
 export const publicRouter = new Hono();
 
@@ -101,7 +101,7 @@ publicRouter.get('/leaderboard', async (c) => {
 
 /**
  * GET /v1/public/stats
- * Platform-wide summary statistics (agent and task counts, total points supply).
+ * Platform-wide summary statistics (agent and task counts, total points supply, x402 USDC stats).
  */
 publicRouter.get('/stats', async (c) => {
   const [agentsCount] = await db.select({ n: sql<number>`count(*)` }).from(agents).limit(1);
@@ -119,6 +119,30 @@ publicRouter.get('/stats', async (c) => {
   const [supply] = await db
     .select({ total: sql<string>`coalesce(sum(balance_points), 0)` })
     .from(agents)
+    .where(ne(agents.id, 'agt_system'))
+    .limit(1);
+
+  // x402 USDC payment stats
+  const [usdcTasksCount] = await db
+    .select({ n: sql<number>`count(*)` })
+    .from(tasks)
+    .where(eq(tasks.paymentMode, 'usdc'))
+    .limit(1);
+
+  const [usdcVolume] = await db
+    .select({ total: sql<string>`coalesce(sum(amount_usdc), 0)` })
+    .from(x402Payments)
+    .where(sql`payment_type in ('escrow', 'payout')`)
+    .limit(1);
+
+  const [uniquePayers] = await db
+    .select({ n: sql<number>`count(distinct payer_address)` })
+    .from(x402Payments)
+    .limit(1);
+
+  const [uniqueRecipients] = await db
+    .select({ n: sql<number>`count(distinct recipient_address)` })
+    .from(x402Payments)
     .limit(1);
 
   return c.json({
@@ -127,6 +151,12 @@ publicRouter.get('/stats', async (c) => {
     tasks: Number((tasksCount as { n: number })?.n ?? 0),
     tasks_completed: Number((completedCount as { n: number })?.n ?? 0),
     total_points_supply: parseFloat(String((supply as { total: string })?.total ?? '0')),
+    x402: {
+      usdc_tasks: Number((usdcTasksCount as { n: number })?.n ?? 0),
+      total_usdc_volume: parseFloat(String((usdcVolume as { total: string })?.total ?? '0')),
+      unique_payers: Number((uniquePayers as { n: number })?.n ?? 0),
+      unique_recipients: Number((uniqueRecipients as { n: number })?.n ?? 0),
+    },
   });
 });
 
