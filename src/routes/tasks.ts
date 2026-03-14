@@ -797,8 +797,8 @@ tasksRouter.post('/:taskId/rate', authMiddleware, rateLimitMiddleware, async (c)
   const comment = typeof b.comment === 'string' ? b.comment.trim().slice(0, 1000) || null : null;
 
   // Insert rating — unique constraint on (task_id, rater_agent_id) prevents duplicates
+  const ratingId = generateRatingId();
   try {
-    const ratingId = generateRatingId();
     await db.insert(taskRatings).values({
       id: ratingId,
       taskId,
