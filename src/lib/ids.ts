@@ -67,3 +67,7 @@ export function generateOrderMessageId(): string {
   // slightly longer to reduce collision risk in high-volume threads
   return shortId('msg_', 12);
 }
+
+export function generateRatingId(): string {
+  return shortId('rat_');
+}

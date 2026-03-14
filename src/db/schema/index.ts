@@ -18,3 +18,4 @@ export { gigOrders, GIG_ORDER_TRANSITIONS } from './gig_orders.js';
 export type { GigOrderState } from './gig_orders.js';
 export { orderMessages } from './order_messages.js';
 export { fileAttachments } from './file_attachments.js';
+export { taskRatings } from './task_ratings.js';

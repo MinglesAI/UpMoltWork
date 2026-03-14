@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { eq, and, ne, gt, desc, sql, inArray } from 'drizzle-orm';
 import { db } from '../db/pool.js';
-import { agents, tasks, bids, submissions, validations, a2aTaskContexts, type AgentRow } from '../db/schema/index.js';
+import { agents, tasks, bids, submissions, validations, a2aTaskContexts, taskRatings, type AgentRow } from '../db/schema/index.js';
 import { authMiddleware } from '../auth.js';
 import { generateTaskId, generateBidId, generateSubmissionId } from '../lib/ids.js';
 import {
@@ -11,7 +11,7 @@ import {
 } from '../lib/transfer.js';
 import { assignValidators, resolveValidation } from '../lib/validation.js';
 import { fireWebhook } from '../lib/webhooks.js';
-import { updateReputation, REPUTATION } from '../lib/reputation.js';
+import { updateReputation, REPUTATION, RATING_DELTA } from '../lib/reputation.js';
 import { rateLimitMiddleware } from '../middleware/rateLimit.js';
 import { fireA2APushAsync } from '../a2a/push.js';
 import { umwStatusToA2A } from '../a2a/handler.js';
@@ -739,6 +739,111 @@ tasksRouter.get('/:taskId/validations', async (c) => {
       assigned_at: v.assignedAt?.toISOString() ?? null,
     })),
   });
+});
+
+// ---------------------------------------------------------------------------
+// Ratings
+// ---------------------------------------------------------------------------
+
+/**
+ * POST /v1/tasks/:taskId/rate
+ * Submit a 1–5 star rating for the executor after task completion.
+ *
+ * Rules:
+ *   - Authenticated (task creator only)
+ *   - Task must be 'completed'
+ *   - Exactly one rating per task per rater
+ *   - Executor's reputation score is updated based on the rating
+ */
+tasksRouter.post('/:taskId/rate', authMiddleware, rateLimitMiddleware, async (c) => {
+  const agent = c.get('agent');
+  const taskId = c.req.param('taskId') ?? '';
+  if (!taskId) return c.json({ error: 'invalid_request', message: 'Missing task id' }, 400);
+
+  const [t] = await db.select().from(tasks).where(eq(tasks.id, taskId)).limit(1);
+  if (!t) return c.json({ error: 'not_found', message: 'Task not found' }, 404);
+
+  if (t.creatorAgentId !== agent.id) {
+    return c.json({ error: 'forbidden', message: 'Only the task creator can submit a rating' }, 403);
+  }
+  if (t.status !== 'completed') {
+    return c.json({ error: 'conflict', message: 'Task must be completed before rating' }, 409);
+  }
+  if (!t.executorAgentId) {
+    return c.json({ error: 'conflict', message: 'Task has no executor to rate' }, 409);
+  }
+
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: 'invalid_request', message: 'Invalid JSON body' }, 400);
+  }
+
+  const b = body as Record<string, unknown>;
+  const rating =
+    typeof b.rating === 'number'
+      ? Math.round(b.rating)
+      : typeof b.rating === 'string'
+        ? parseInt(b.rating, 10)
+        : NaN;
+
+  if (isNaN(rating) || rating < 1 || rating > 5) {
+    return c.json({ error: 'invalid_request', message: 'rating must be an integer between 1 and 5' }, 400);
+  }
+
+  const comment = typeof b.comment === 'string' ? b.comment.trim().slice(0, 1000) || null : null;
+
+  // Insert rating — unique constraint on (task_id, rater_agent_id) prevents duplicates
+  try {
+    await db.insert(taskRatings).values({
+      taskId,
+      raterAgentId: agent.id,
+      ratedAgentId: t.executorAgentId,
+      rating,
+      comment,
+    });
+  } catch (err: unknown) {
+    const e = err as { code?: string };
+    if (e.code === '23505') {
+      return c.json({ error: 'conflict', message: 'You have already rated this task' }, 409);
+    }
+    throw err;
+  }
+
+  // Apply reputation delta to executor based on the star rating
+  const delta = RATING_DELTA[rating] ?? 0;
+  if (delta !== 0) {
+    await updateReputation(t.executorAgentId, delta);
+  }
+
+  // Fetch updated executor reputation for the response
+  const [executor] = await db
+    .select({ reputationScore: agents.reputationScore })
+    .from(agents)
+    .where(eq(agents.id, t.executorAgentId))
+    .limit(1);
+
+  fireWebhook(t.executorAgentId, 'task.rated', {
+    task_id: taskId,
+    rating,
+    comment,
+    reputation_delta: delta,
+  });
+
+  return c.json(
+    {
+      task_id: taskId,
+      executor_agent_id: t.executorAgentId,
+      rating,
+      comment,
+      reputation_delta: delta,
+      executor_reputation_score: executor?.reputationScore
+        ? parseFloat(executor.reputationScore)
+        : null,
+    },
+    201,
+  );
 });
 
 // ---------------------------------------------------------------------------
