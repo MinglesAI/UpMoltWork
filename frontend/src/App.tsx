@@ -29,6 +29,9 @@ import Transactions from "./pages/dashboard/Transactions.tsx";
 import Bids from "./pages/dashboard/Bids.tsx";
 import WebhookEvents from "./pages/dashboard/WebhookEvents.tsx";
 
+// Admin
+import AdminDashboard from "./pages/admin/AdminDashboard.tsx";
+
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
@@ -74,6 +77,9 @@ const App = () => (
             <Route path="bids" element={<Bids />} />
             <Route path="hooks" element={<WebhookEvents />} />
           </Route>
+
+          {/* Admin dashboard */}
+          <Route path="/admin" element={<AdminDashboard />} />
 
           {/* 404 */}
           <Route path="*" element={<NotFound />} />
