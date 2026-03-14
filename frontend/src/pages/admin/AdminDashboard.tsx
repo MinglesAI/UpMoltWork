@@ -4,6 +4,7 @@
  */
 
 import { useState, useCallback } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   getAdminToken,
   setAdminToken,
@@ -14,10 +15,18 @@ import {
   useAdminAgents,
   useAdminTasks,
   useAdminStats,
+  useAdminRecurringTemplates,
+  useAdminRecurringInstances,
+  adminToggleRecurringTemplate,
+  adminTriggerRecurringTemplate,
+  adminUpdateRecurringTemplate,
+  adminCreateRecurringTemplate,
   type AdminTransaction,
   type AdminX402Payment,
   type AdminAgent,
   type AdminTask,
+  type AdminRecurringTemplate,
+  type AdminRecurringInstance,
 } from '@/api/adminQueries';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
@@ -32,6 +41,15 @@ import {
   CreditCard,
   BarChart3,
   ArrowUpDown,
+  RefreshCw,
+  Play,
+  ToggleLeft,
+  ToggleRight,
+  Clock,
+  X,
+  Check,
+  Pencil,
+  Plus,
 } from 'lucide-react';
 
 // ─── Token gate ───────────────────────────────────────────────────────────────
@@ -642,9 +660,670 @@ function StatsTab({ token }: { token: string }) {
   );
 }
 
+// ─── Recurring Tasks tab ──────────────────────────────────────────────────────
+
+function modeBadge(mode: string) {
+  const map: Record<string, 'success' | 'warning' | 'info' | 'default'> = {
+    infinite: 'success',
+    periodic: 'info',
+    capped: 'warning',
+  };
+  return <Badge label={mode} variant={map[mode] ?? 'default'} />;
+}
+
+function validationBadge(vtype: string) {
+  const map: Record<string, 'success' | 'warning' | 'info' | 'default'> = {
+    auto: 'success',
+    peer: 'info',
+    link: 'warning',
+    code: 'warning',
+    combined: 'info',
+  };
+  return <Badge label={vtype} variant={map[vtype] ?? 'default'} />;
+}
+
+interface TemplateDetailProps {
+  template: AdminRecurringTemplate;
+  token: string;
+  onClose: () => void;
+  onUpdated: () => void;
+}
+
+function TemplateDetail({ template, token, onClose, onUpdated }: TemplateDetailProps) {
+  const [instancePage, setInstancePage] = useState(1);
+  const INSTANCE_LIMIT = 20;
+  const { data: instanceData, isLoading: instancesLoading } = useAdminRecurringInstances(
+    token,
+    template.id,
+    { page: instancePage, limit: INSTANCE_LIMIT },
+  );
+
+  const [triggerLoading, setTriggerLoading] = useState(false);
+  const [triggerMsg, setTriggerMsg] = useState<string | null>(null);
+  const [editing, setEditing] = useState(false);
+
+  // Editable fields
+  const [editTitle, setEditTitle] = useState(template.title_template);
+  const [editDesc, setEditDesc] = useState(template.description_template);
+  const [editCategory, setEditCategory] = useState(template.category);
+  const [editPrice, setEditPrice] = useState(String(template.price_points));
+  const [editMode, setEditMode] = useState(template.mode);
+  const [editMaxConcurrent, setEditMaxConcurrent] = useState(String(template.max_concurrent));
+  const [editMaxTotal, setEditMaxTotal] = useState(template.max_total != null ? String(template.max_total) : '');
+  const [editCron, setEditCron] = useState(template.cron_expr ?? '');
+  const [editTz, setEditTz] = useState(template.timezone ?? 'UTC');
+  const [editValidationType, setEditValidationType] = useState(template.validation_type);
+  const [editValidationConfig, setEditValidationConfig] = useState(
+    template.validation_config ? JSON.stringify(template.validation_config, null, 2) : '{}',
+  );
+  const [editPosterAgent, setEditPosterAgent] = useState(template.poster_agent_id ?? '');
+  const [saveLoading, setSaveLoading] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  async function handleTrigger() {
+    setTriggerLoading(true);
+    setTriggerMsg(null);
+    try {
+      const res = await adminTriggerRecurringTemplate(token, template.id);
+      setTriggerMsg(`✅ Posted task ${res.task_id}`);
+      onUpdated();
+    } catch (err) {
+      setTriggerMsg(`❌ ${err instanceof Error ? err.message : 'Failed'}`);
+    } finally {
+      setTriggerLoading(false);
+    }
+  }
+
+  async function handleSave() {
+    setSaveLoading(true);
+    setSaveError(null);
+    try {
+      let parsedConfig: Record<string, unknown> | null = null;
+      try {
+        parsedConfig = JSON.parse(editValidationConfig) as Record<string, unknown>;
+      } catch {
+        setSaveError('validation_config must be valid JSON');
+        setSaveLoading(false);
+        return;
+      }
+
+      await adminUpdateRecurringTemplate(token, template.id, {
+        title_template: editTitle,
+        description_template: editDesc,
+        category: editCategory,
+        price_points: parseInt(editPrice, 10),
+        mode: editMode,
+        max_concurrent: parseInt(editMaxConcurrent, 10),
+        max_total: editMaxTotal ? parseInt(editMaxTotal, 10) : null,
+        cron_expr: editCron || null,
+        timezone: editTz,
+        validation_type: editValidationType,
+        validation_config: parsedConfig,
+        poster_agent_id: editPosterAgent || undefined,
+      });
+      setEditing(false);
+      onUpdated();
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : 'Save failed');
+    } finally {
+      setSaveLoading(false);
+    }
+  }
+
+  const instanceColumns = [
+    { header: 'Instance ID', key: 'id' as keyof AdminRecurringInstance },
+    { header: 'Task ID', key: 'task_id' as keyof AdminRecurringInstance, render: (r: AdminRecurringInstance) => (
+      r.task_id ?? <span className="text-muted-foreground">—</span>
+    )},
+    { header: 'Task Title', key: 'task_title' as keyof AdminRecurringInstance, render: (r: AdminRecurringInstance) => (
+      <span className="max-w-[180px] truncate block" title={r.task_title ?? undefined}>{r.task_title ?? '—'}</span>
+    )},
+    { header: 'Status', key: 'task_status' as keyof AdminRecurringInstance, render: (r: AdminRecurringInstance) => (
+      r.task_status ? statusBadge(r.task_status) : <span className="text-muted-foreground">—</span>
+    )},
+    { header: 'Posted At', key: 'posted_at' as keyof AdminRecurringInstance, render: (r: AdminRecurringInstance) => fmtDate(r.posted_at) },
+    { header: 'Variables', key: 'variables' as keyof AdminRecurringInstance, render: (r: AdminRecurringInstance) => (
+      r.variables
+        ? <span className="font-mono text-xs">{Object.entries(r.variables).map(([k,v]) => `${k}=${v}`).join(', ')}</span>
+        : <span className="text-muted-foreground">—</span>
+    )},
+  ];
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/60 flex items-start justify-end" onClick={onClose}>
+      <div
+        className="h-full w-full max-w-2xl bg-background border-l shadow-xl overflow-y-auto"
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="sticky top-0 bg-background border-b p-4 flex items-center justify-between z-10">
+          <h2 className="font-bold text-base truncate max-w-[80%]">{template.title_template}</h2>
+          <button onClick={onClose} className="p-1 rounded hover:bg-muted transition-colors">
+            <X size={16} />
+          </button>
+        </div>
+
+        <div className="p-4 space-y-6">
+          {/* Header badges */}
+          <div className="flex items-center gap-2 flex-wrap">
+            {modeBadge(template.mode)}
+            {validationBadge(template.validation_type)}
+            <Badge label={template.enabled ? 'enabled' : 'disabled'} variant={template.enabled ? 'success' : 'danger'} />
+            <span className="text-sm text-muted-foreground">
+              {template.open_instances}/{template.max_concurrent} open slots
+            </span>
+            {template.max_total != null && (
+              <span className="text-sm text-muted-foreground">
+                {template.completed_count}/{template.max_total} total completed
+              </span>
+            )}
+          </div>
+
+          {/* Action buttons */}
+          <div className="flex gap-2 flex-wrap">
+            <button
+              onClick={handleTrigger}
+              disabled={triggerLoading}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-primary text-primary-foreground text-sm hover:bg-primary/90 disabled:opacity-50 transition-colors"
+            >
+              <Play size={13} /> {triggerLoading ? 'Triggering…' : 'Trigger Now'}
+            </button>
+            <button
+              onClick={() => setEditing(!editing)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded border text-sm hover:bg-muted transition-colors"
+            >
+              <Pencil size={13} /> {editing ? 'Cancel Edit' : 'Edit'}
+            </button>
+          </div>
+
+          {triggerMsg && (
+            <p className={`text-sm ${triggerMsg.startsWith('✅') ? 'text-green-600' : 'text-red-600'}`}>
+              {triggerMsg}
+            </p>
+          )}
+
+          {/* Edit form */}
+          {editing ? (
+            <div className="space-y-3 border rounded-lg p-4">
+              <h3 className="text-sm font-semibold">Edit Template</h3>
+
+              {saveError && <p className="text-sm text-destructive">{saveError}</p>}
+
+              <div className="grid grid-cols-1 gap-3">
+                <label className="block">
+                  <span className="text-xs text-muted-foreground">Title Template</span>
+                  <input value={editTitle} onChange={e => setEditTitle(e.target.value)}
+                    className="mt-0.5 w-full rounded border bg-background px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-primary" />
+                </label>
+                <label className="block">
+                  <span className="text-xs text-muted-foreground">Description Template</span>
+                  <textarea value={editDesc} onChange={e => setEditDesc(e.target.value)} rows={4}
+                    className="mt-0.5 w-full rounded border bg-background px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-primary resize-y" />
+                </label>
+                <div className="grid grid-cols-2 gap-3">
+                  <label className="block">
+                    <span className="text-xs text-muted-foreground">Category</span>
+                    <input value={editCategory} onChange={e => setEditCategory(e.target.value)}
+                      className="mt-0.5 w-full rounded border bg-background px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-primary" />
+                  </label>
+                  <label className="block">
+                    <span className="text-xs text-muted-foreground">Price (Shells)</span>
+                    <input type="number" value={editPrice} onChange={e => setEditPrice(e.target.value)}
+                      className="mt-0.5 w-full rounded border bg-background px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-primary" />
+                  </label>
+                  <label className="block">
+                    <span className="text-xs text-muted-foreground">Mode</span>
+                    <select value={editMode} onChange={e => setEditMode(e.target.value as AdminRecurringTemplate['mode'])}
+                      className="mt-0.5 w-full rounded border bg-background px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-primary">
+                      <option value="infinite">infinite</option>
+                      <option value="periodic">periodic</option>
+                      <option value="capped">capped</option>
+                    </select>
+                  </label>
+                  <label className="block">
+                    <span className="text-xs text-muted-foreground">Max Concurrent</span>
+                    <input type="number" value={editMaxConcurrent} onChange={e => setEditMaxConcurrent(e.target.value)}
+                      className="mt-0.5 w-full rounded border bg-background px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-primary" />
+                  </label>
+                  {editMode === 'capped' && (
+                    <label className="block">
+                      <span className="text-xs text-muted-foreground">Max Total</span>
+                      <input type="number" value={editMaxTotal} onChange={e => setEditMaxTotal(e.target.value)}
+                        className="mt-0.5 w-full rounded border bg-background px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-primary" />
+                    </label>
+                  )}
+                  <label className="block">
+                    <span className="text-xs text-muted-foreground">Cron Expression</span>
+                    <input value={editCron} onChange={e => setEditCron(e.target.value)} placeholder="0 9 * * *"
+                      className="mt-0.5 w-full rounded border bg-background px-2 py-1.5 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-primary" />
+                  </label>
+                  <label className="block">
+                    <span className="text-xs text-muted-foreground">Timezone</span>
+                    <input value={editTz} onChange={e => setEditTz(e.target.value)}
+                      className="mt-0.5 w-full rounded border bg-background px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-primary" />
+                  </label>
+                  <label className="block">
+                    <span className="text-xs text-muted-foreground">Validation Type</span>
+                    <select value={editValidationType} onChange={e => setEditValidationType(e.target.value)}
+                      className="mt-0.5 w-full rounded border bg-background px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-primary">
+                      {['peer','auto','link','code','combined'].map(v => (
+                        <option key={v} value={v}>{v}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="block">
+                    <span className="text-xs text-muted-foreground">Poster Agent ID</span>
+                    <input value={editPosterAgent} onChange={e => setEditPosterAgent(e.target.value)}
+                      className="mt-0.5 w-full rounded border bg-background px-2 py-1.5 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-primary" />
+                  </label>
+                </div>
+                <label className="block">
+                  <span className="text-xs text-muted-foreground">Validation Config (JSON)</span>
+                  <textarea value={editValidationConfig} onChange={e => setEditValidationConfig(e.target.value)} rows={4}
+                    className="mt-0.5 w-full rounded border bg-background px-2 py-1.5 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-primary resize-y" />
+                </label>
+              </div>
+
+              <div className="flex gap-2">
+                <button
+                  onClick={handleSave}
+                  disabled={saveLoading}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-primary text-primary-foreground text-sm hover:bg-primary/90 disabled:opacity-50 transition-colors"
+                >
+                  <Check size={13} /> {saveLoading ? 'Saving…' : 'Save Changes'}
+                </button>
+                <button
+                  onClick={() => setEditing(false)}
+                  className="px-3 py-1.5 rounded border text-sm hover:bg-muted transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            /* Read-only details */
+            <div className="grid grid-cols-2 gap-3 text-sm">
+              <div>
+                <p className="text-xs text-muted-foreground">Category</p>
+                <p className="font-medium">{template.category}</p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Price</p>
+                <p className="font-medium font-mono">{template.price_points} 🐚</p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Cron</p>
+                <p className="font-medium font-mono">{template.cron_expr ?? '—'}</p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Timezone</p>
+                <p className="font-medium">{template.timezone ?? 'UTC'}</p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Poster Agent</p>
+                <p className="font-medium font-mono">{template.poster_agent_id ?? '—'}</p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Pause Until</p>
+                <p className="font-medium">{template.pause_until ? fmtDate(template.pause_until) : '—'}</p>
+              </div>
+              <div className="col-span-2">
+                <p className="text-xs text-muted-foreground">Title Template</p>
+                <p className="font-medium text-sm">{template.title_template}</p>
+              </div>
+              <div className="col-span-2">
+                <p className="text-xs text-muted-foreground">Description Template</p>
+                <p className="text-sm text-muted-foreground line-clamp-3">{template.description_template}</p>
+              </div>
+              {template.validation_config && (
+                <div className="col-span-2">
+                  <p className="text-xs text-muted-foreground">Validation Config</p>
+                  <pre className="text-xs font-mono bg-muted p-2 rounded mt-1 overflow-x-auto">
+                    {JSON.stringify(template.validation_config, null, 2)}
+                  </pre>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Instance history */}
+          <div>
+            <h3 className="text-sm font-semibold mb-2">Instance History</h3>
+            {instancesLoading ? (
+              <div className="space-y-2">{Array.from({length:3}).map((_,i) => <Skeleton key={i} className="h-10 rounded" />)}</div>
+            ) : (
+              <>
+                <Table rows={instanceData?.data ?? []} columns={instanceColumns} />
+                {instanceData && (
+                  <PaginationBar
+                    page={instancePage}
+                    total={instanceData.pagination.total}
+                    limit={INSTANCE_LIMIT}
+                    onPage={setInstancePage}
+                  />
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+interface CreateTemplateFormProps {
+  token: string;
+  onCreated: () => void;
+  onCancel: () => void;
+}
+
+function CreateTemplateForm({ token, onCreated, onCancel }: CreateTemplateFormProps) {
+  const [title, setTitle] = useState('');
+  const [desc, setDesc] = useState('');
+  const [category, setCategory] = useState('content');
+  const [price, setPrice] = useState('15');
+  const [mode, setMode] = useState<'infinite' | 'periodic' | 'capped'>('periodic');
+  const [maxConcurrent, setMaxConcurrent] = useState('1');
+  const [maxTotal, setMaxTotal] = useState('');
+  const [cron, setCron] = useState('');
+  const [tz, setTz] = useState('UTC');
+  const [validationType, setValidationType] = useState('peer');
+  const [validationConfig, setValidationConfig] = useState('{}');
+  const [posterAgent, setPosterAgent] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setLoading(true);
+
+    try {
+      let parsedConfig: Record<string, unknown> | null = null;
+      try {
+        parsedConfig = JSON.parse(validationConfig) as Record<string, unknown>;
+      } catch {
+        setError('validation_config must be valid JSON');
+        setLoading(false);
+        return;
+      }
+
+      await adminCreateRecurringTemplate(token, {
+        title_template: title,
+        description_template: desc,
+        category,
+        price_points: parseInt(price, 10),
+        mode,
+        max_concurrent: parseInt(maxConcurrent, 10),
+        max_total: maxTotal ? parseInt(maxTotal, 10) : null,
+        cron_expr: cron || null,
+        timezone: tz,
+        validation_type: validationType,
+        validation_config: parsedConfig,
+        poster_agent_id: posterAgent || undefined,
+        enabled: true,
+      });
+      onCreated();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Create failed');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="border rounded-lg p-4 space-y-3">
+      <h3 className="text-sm font-semibold">New Recurring Template</h3>
+      {error && <p className="text-sm text-destructive">{error}</p>}
+      <form onSubmit={handleSubmit} className="grid grid-cols-1 gap-3">
+        <label className="block">
+          <span className="text-xs text-muted-foreground">Title Template *</span>
+          <input required value={title} onChange={e => setTitle(e.target.value)} placeholder="Daily AI news — {{date}}"
+            className="mt-0.5 w-full rounded border bg-background px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-primary" />
+        </label>
+        <label className="block">
+          <span className="text-xs text-muted-foreground">Description Template *</span>
+          <textarea required value={desc} onChange={e => setDesc(e.target.value)} rows={3} placeholder="Describe the recurring task…"
+            className="mt-0.5 w-full rounded border bg-background px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-primary resize-y" />
+        </label>
+        <div className="grid grid-cols-2 gap-3">
+          <label className="block">
+            <span className="text-xs text-muted-foreground">Category</span>
+            <select value={category} onChange={e => setCategory(e.target.value)}
+              className="mt-0.5 w-full rounded border bg-background px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-primary">
+              {['content','images','video','marketing','development','prototypes','analytics','validation'].map(c => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+          </label>
+          <label className="block">
+            <span className="text-xs text-muted-foreground">Price (Shells)</span>
+            <input required type="number" value={price} onChange={e => setPrice(e.target.value)}
+              className="mt-0.5 w-full rounded border bg-background px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-primary" />
+          </label>
+          <label className="block">
+            <span className="text-xs text-muted-foreground">Mode</span>
+            <select value={mode} onChange={e => setMode(e.target.value as 'infinite' | 'periodic' | 'capped')}
+              className="mt-0.5 w-full rounded border bg-background px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-primary">
+              <option value="infinite">infinite</option>
+              <option value="periodic">periodic</option>
+              <option value="capped">capped</option>
+            </select>
+          </label>
+          <label className="block">
+            <span className="text-xs text-muted-foreground">Max Concurrent</span>
+            <input type="number" value={maxConcurrent} onChange={e => setMaxConcurrent(e.target.value)}
+              className="mt-0.5 w-full rounded border bg-background px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-primary" />
+          </label>
+          {mode === 'capped' && (
+            <label className="block">
+              <span className="text-xs text-muted-foreground">Max Total</span>
+              <input type="number" value={maxTotal} onChange={e => setMaxTotal(e.target.value)}
+                className="mt-0.5 w-full rounded border bg-background px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-primary" />
+            </label>
+          )}
+          <label className="block">
+            <span className="text-xs text-muted-foreground">Cron Expression</span>
+            <input value={cron} onChange={e => setCron(e.target.value)} placeholder="0 9 * * *"
+              className="mt-0.5 w-full rounded border bg-background px-2 py-1.5 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-primary" />
+          </label>
+          <label className="block">
+            <span className="text-xs text-muted-foreground">Timezone</span>
+            <input value={tz} onChange={e => setTz(e.target.value)}
+              className="mt-0.5 w-full rounded border bg-background px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-primary" />
+          </label>
+          <label className="block">
+            <span className="text-xs text-muted-foreground">Validation Type</span>
+            <select value={validationType} onChange={e => setValidationType(e.target.value)}
+              className="mt-0.5 w-full rounded border bg-background px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-primary">
+              {['peer','auto','link','code','combined'].map(v => (
+                <option key={v} value={v}>{v}</option>
+              ))}
+            </select>
+          </label>
+          <label className="block">
+            <span className="text-xs text-muted-foreground">Poster Agent ID</span>
+            <input value={posterAgent} onChange={e => setPosterAgent(e.target.value)} placeholder="agt_…"
+              className="mt-0.5 w-full rounded border bg-background px-2 py-1.5 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-primary" />
+          </label>
+        </div>
+        <label className="block">
+          <span className="text-xs text-muted-foreground">Validation Config (JSON)</span>
+          <textarea value={validationConfig} onChange={e => setValidationConfig(e.target.value)} rows={3}
+            className="mt-0.5 w-full rounded border bg-background px-2 py-1.5 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-primary resize-y" />
+        </label>
+        <div className="flex gap-2">
+          <button type="submit" disabled={loading}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-primary text-primary-foreground text-sm hover:bg-primary/90 disabled:opacity-50 transition-colors">
+            <Plus size={13} /> {loading ? 'Creating…' : 'Create Template'}
+          </button>
+          <button type="button" onClick={onCancel}
+            className="px-3 py-1.5 rounded border text-sm hover:bg-muted transition-colors">
+            Cancel
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function RecurringTasksTab({ token }: { token: string }) {
+  const [page, setPage] = useState(1);
+  const LIMIT = 50;
+  const queryClient = useQueryClient();
+
+  const { data, isLoading, refetch } = useAdminRecurringTemplates(token, { page, limit: LIMIT });
+
+  const [selectedTemplate, setSelectedTemplate] = useState<AdminRecurringTemplate | null>(null);
+  const [showCreate, setShowCreate] = useState(false);
+  const [togglingId, setTogglingId] = useState<string | null>(null);
+
+  async function handleToggle(template: AdminRecurringTemplate) {
+    setTogglingId(template.id);
+    try {
+      await adminToggleRecurringTemplate(token, template.id, !template.enabled);
+      await queryClient.invalidateQueries({ queryKey: ['admin-recurring-templates'] });
+      refetch().catch(() => {});
+    } catch (err) {
+      console.error('Toggle failed:', err);
+    } finally {
+      setTogglingId(null);
+    }
+  }
+
+  function handleUpdated() {
+    queryClient.invalidateQueries({ queryKey: ['admin-recurring-templates'] }).catch(() => {});
+    refetch().catch(() => {});
+  }
+
+  const columns = [
+    {
+      header: 'Title Template',
+      key: 'title_template' as keyof AdminRecurringTemplate,
+      render: (r: AdminRecurringTemplate) => (
+        <button
+          onClick={() => setSelectedTemplate(r)}
+          className="text-left text-primary hover:underline max-w-[200px] truncate block"
+          title={r.title_template}
+        >
+          {r.title_template}
+        </button>
+      ),
+    },
+    { header: 'Mode', key: 'mode' as keyof AdminRecurringTemplate, render: (r: AdminRecurringTemplate) => modeBadge(r.mode) },
+    {
+      header: 'Slots',
+      key: 'open_instances' as keyof AdminRecurringTemplate,
+      render: (r: AdminRecurringTemplate) => (
+        <span className={`font-mono text-sm ${r.open_instances >= r.max_concurrent ? 'text-green-600' : 'text-yellow-600'}`}>
+          {r.open_instances}/{r.max_concurrent} open
+        </span>
+      ),
+    },
+    { header: 'Cron', key: 'cron_expr' as keyof AdminRecurringTemplate, render: (r: AdminRecurringTemplate) => (
+      r.cron_expr
+        ? <span className="font-mono text-xs flex items-center gap-1"><Clock size={10} /> {r.cron_expr}</span>
+        : <span className="text-muted-foreground">—</span>
+    )},
+    { header: 'Validation', key: 'validation_type' as keyof AdminRecurringTemplate, render: (r: AdminRecurringTemplate) => validationBadge(r.validation_type) },
+    { header: 'Category', key: 'category' as keyof AdminRecurringTemplate },
+    { header: 'Price 🐚', key: 'price_points' as keyof AdminRecurringTemplate, render: (r: AdminRecurringTemplate) => (
+      <span className="font-mono">{r.price_points}</span>
+    )},
+    {
+      header: 'Enabled',
+      key: 'enabled' as keyof AdminRecurringTemplate,
+      render: (r: AdminRecurringTemplate) => (
+        <button
+          onClick={() => handleToggle(r)}
+          disabled={togglingId === r.id}
+          className="flex items-center gap-1 text-sm hover:opacity-70 transition-opacity disabled:opacity-40"
+          title={r.enabled ? 'Click to disable' : 'Click to enable'}
+        >
+          {togglingId === r.id ? (
+            <RefreshCw size={14} className="animate-spin" />
+          ) : r.enabled ? (
+            <ToggleRight size={16} className="text-green-600" />
+          ) : (
+            <ToggleLeft size={16} className="text-muted-foreground" />
+          )}
+          {r.enabled ? 'On' : 'Off'}
+        </button>
+      ),
+    },
+    {
+      header: 'Trigger',
+      key: 'id' as keyof AdminRecurringTemplate,
+      render: (r: AdminRecurringTemplate) => (
+        <button
+          onClick={() => setSelectedTemplate(r)}
+          className="flex items-center gap-1 text-xs text-primary hover:underline"
+        >
+          <Play size={11} /> Open
+        </button>
+      ),
+    },
+  ];
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Recurring Templates</h2>
+        <div className="flex gap-2">
+          <button
+            onClick={() => refetch()}
+            className="flex items-center gap-1 px-3 py-1.5 rounded border text-sm hover:bg-muted transition-colors"
+          >
+            <RefreshCw size={13} /> Refresh
+          </button>
+          <button
+            onClick={() => setShowCreate(!showCreate)}
+            className="flex items-center gap-1 px-3 py-1.5 rounded bg-primary text-primary-foreground text-sm hover:bg-primary/90 transition-colors"
+          >
+            <Plus size={13} /> New Template
+          </button>
+        </div>
+      </div>
+
+      {showCreate && (
+        <CreateTemplateForm
+          token={token}
+          onCreated={() => {
+            setShowCreate(false);
+            handleUpdated();
+          }}
+          onCancel={() => setShowCreate(false)}
+        />
+      )}
+
+      {isLoading ? (
+        <div className="space-y-2">{Array.from({length:6}).map((_,i) => <Skeleton key={i} className="h-12 rounded" />)}</div>
+      ) : (
+        <>
+          <Table rows={data?.data ?? []} columns={columns} />
+          {data && (
+            <PaginationBar page={page} total={data.pagination.total} limit={LIMIT} onPage={setPage} />
+          )}
+        </>
+      )}
+
+      {selectedTemplate && (
+        <TemplateDetail
+          template={selectedTemplate}
+          token={token}
+          onClose={() => setSelectedTemplate(null)}
+          onUpdated={() => {
+            handleUpdated();
+            // Update selected template from fresh data if available
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
 // ─── Main dashboard ───────────────────────────────────────────────────────────
 
-type TabId = 'transactions' | 'x402' | 'agents' | 'tasks' | 'stats';
+type TabId = 'transactions' | 'x402' | 'agents' | 'tasks' | 'stats' | 'recurring';
 
 const TABS: { id: TabId; label: string; icon: React.ReactNode }[] = [
   { id: 'transactions', label: 'Transactions', icon: <BarChart3 size={14} /> },
@@ -652,6 +1331,7 @@ const TABS: { id: TabId; label: string; icon: React.ReactNode }[] = [
   { id: 'agents', label: 'Agents', icon: <Users size={14} /> },
   { id: 'tasks', label: 'Tasks', icon: <ListTodo size={14} /> },
   { id: 'stats', label: 'Stats', icon: <BarChart3 size={14} /> },
+  { id: 'recurring', label: 'Recurring Tasks', icon: <RefreshCw size={14} /> },
 ];
 
 function Dashboard({ token, onLogout }: { token: string; onLogout: () => void }) {
@@ -704,6 +1384,7 @@ function Dashboard({ token, onLogout }: { token: string; onLogout: () => void })
         {tab === 'agents' && <AgentsTab token={token} />}
         {tab === 'tasks' && <TasksTab token={token} />}
         {tab === 'stats' && <StatsTab token={token} />}
+        {tab === 'recurring' && <RecurringTasksTab token={token} />}
       </main>
     </div>
   );

@@ -1,0 +1,76 @@
+# Recurring Task Templates — seed data
+# These are seeded via drizzle/migrations/0008_recurring_tasks.sql
+# Poster agent: agt_f508hcyf (Mingles AI Tasks, balance=5000 🐚)
+
+templates:
+  - id: rtt_ainews01
+    title_template: "Daily AI News Summary — {{date}}"
+    category: content
+    price_points: 20
+    mode: periodic
+    max_concurrent: 2
+    cron_expr: "0 9 * * *"
+    timezone: UTC
+    validation_type: peer
+    validation_config:
+      min_rating: 3
+
+  - id: rtt_ghtrend1
+    title_template: "Daily GitHub Trending AI Repos — {{date}}"
+    category: content
+    price_points: 15
+    mode: periodic
+    max_concurrent: 2
+    cron_expr: "0 9 * * *"
+    timezone: UTC
+    validation_type: peer
+    validation_config:
+      min_rating: 3
+
+  - id: rtt_social01
+    title_template: "Daily AI Insight Social Post — {{date}}"
+    category: content
+    price_points: 10
+    mode: periodic
+    max_concurrent: 1
+    cron_expr: "0 10 * * *"
+    timezone: UTC
+    validation_type: peer
+    validation_config:
+      min_rating: 3
+
+  - id: rtt_newslttr
+    title_template: "Weekly AI Agent Newsletter — {{week_start}}"
+    category: content
+    price_points: 50
+    mode: periodic
+    max_concurrent: 1
+    cron_expr: "0 8 * * 1"   # Mondays
+    timezone: UTC
+    validation_type: peer
+    validation_config:
+      min_rating: 4
+
+  - id: rtt_infrarev
+    title_template: "Weekly AI Infrastructure Review — {{week_start}}"
+    category: content
+    price_points: 45
+    mode: periodic
+    max_concurrent: 1
+    cron_expr: "0 8 * * 5"   # Fridays
+    timezone: UTC
+    validation_type: peer
+    validation_config:
+      min_rating: 3
+
+  - id: rtt_comptmon
+    title_template: "Weekly Competitor Monitoring Report — {{week_start}}"
+    category: analytics
+    price_points: 40
+    mode: periodic
+    max_concurrent: 1
+    cron_expr: "0 9 * * 3"   # Wednesdays
+    timezone: UTC
+    validation_type: peer
+    validation_config:
+      min_rating: 3
