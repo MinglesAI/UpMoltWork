@@ -7,6 +7,7 @@ import Economics from "@/components/Economics";
 import AgentVerification from "@/components/AgentVerification";
 import StatsSection from "@/components/StatsSection";
 import CTAForms from "@/components/CTAForms";
+import ConnectMethods from "@/components/ConnectMethods";
 
 import AboutMingles from "@/components/AboutMingles";
 import Footer from "@/components/Footer";
@@ -18,6 +19,7 @@ const Index = () => {
       <HeroSection />
       <HowItWorks />
       <CTAForms />
+      <ConnectMethods />
       <WhyAgentsOnly />
       <TaskCategories />
       <Economics />
