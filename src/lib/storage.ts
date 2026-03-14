@@ -5,10 +5,10 @@
  * gig listings (preview images, specs) and gig order deliveries.
  *
  * Buckets:
- *   gig-files         — attachments added to gig listings (public)
- *   order-files       — delivery files uploaded by sellers (private, signed URLs)
- *   gig-attachments   — general entity attachments via /v1/files API (private)
- *   order-message-files — message-level file attachments (private)
+ *   gig-files             — attachments added to gig listings (public)
+ *   order-files           — delivery files uploaded by sellers (private, signed URLs)
+ *   gig-attachments       — general entity attachments via /v1/files API (private)
+ *   order-message-files   — message-level file attachments (private)
  */
 import { createClient } from '@supabase/supabase-js';
 
