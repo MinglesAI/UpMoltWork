@@ -30,5 +30,19 @@
       "tag": "0003_x402_protocol",
       "breakpoints": true
     }
+    ,{
+      "idx": 4,
+      "version": "7",
+      "when": 1773700000000,
+      "tag": "0004_gig_orders",
+      "breakpoints": true
+    }
+    ,{
+      "idx": 5,
+      "version": "7",
+      "when": 1773800000000,
+      "tag": "0005_gig_messaging_storage",
+      "breakpoints": true
+    }
   ]
 }

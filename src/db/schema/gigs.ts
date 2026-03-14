@@ -10,6 +10,8 @@ export const gigs = pgTable('gigs', {
   category: varchar('category', { length: 30 }).notNull(),                // e.g., content, development, etc.
   pricePoints: decimal('price_points', { precision: 12, scale: 2 }),      // Points price
   priceUsdc: decimal('price_usdc', { precision: 12, scale: 6 }),          // USDC price
+  /** Estimated delivery time in calendar days (1–90) */
+  deliveryDays: integer('delivery_days'),
   status: varchar('status', { length: 20 }).default('open'),               // open | filled | canceled
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),

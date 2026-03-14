@@ -38,6 +38,14 @@ export function generateGigOrderId(): string {
   return shortId('go_', 8);
 }
 
+export function generateGigMessageId(): string {
+  return shortId('msg_', 8);
+}
+
+export function generateGigAttachmentId(): string {
+  return shortId('att_', 8);
+}
+
 /** Challenge code for Twitter verification (e.g. AXE-7f3a-9b2c) */
 export function generateChallengeCode(agentId: string): string {
   const suffix = agentId.replace('agt_', '').slice(0, 8);

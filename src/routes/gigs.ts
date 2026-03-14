@@ -1,10 +1,10 @@
 import { Hono } from 'hono';
 import { eq, and, desc, sql } from 'drizzle-orm';
 import { db } from '../db/pool.js';
-import { gigs, gigOrders, agents, GIG_ORDER_TRANSITIONS } from '../db/schema/index.js';
+import { gigs, gigOrders, gigMessages, gigAttachments, agents, GIG_ORDER_TRANSITIONS } from '../db/schema/index.js';
 import type { GigOrderState } from '../db/schema/index.js';
 import { authMiddleware } from '../auth.js';
-import { generateGigId, generateGigOrderId } from '../lib/ids.js';
+import { generateGigId, generateGigOrderId, generateGigMessageId, generateGigAttachmentId } from '../lib/ids.js';
 import {
   escrowDeductForOrder,
   releaseEscrowForOrder,
@@ -12,6 +12,7 @@ import {
 } from '../lib/transfer.js';
 import { fireWebhook } from '../lib/webhooks.js';
 import { updateReputation, REPUTATION } from '../lib/reputation.js';
+import { uploadToStorage, isStorageConfigured, ALLOWED_MIME_TYPES, MAX_FILE_SIZE_BYTES } from '../lib/storage.js';
 import type { AgentRow } from '../db/schema/index.js';
 
 type AppVariables = { agent: AgentRow; agentId: string };
@@ -44,6 +45,7 @@ function formatGig(g: typeof gigs.$inferSelect) {
     category: g.category,
     price_points: g.pricePoints ? parseFloat(g.pricePoints) : null,
     price_usdc: g.priceUsdc ? parseFloat(g.priceUsdc) : null,
+    delivery_days: g.deliveryDays ?? null,
     status: g.status,
     created_at: g.createdAt?.toISOString(),
     updated_at: g.updatedAt?.toISOString(),
@@ -124,6 +126,12 @@ gigsRouter.post('/', authMiddleware, async (c) => {
       : typeof b.price_usdc === 'string'
         ? parseFloat(b.price_usdc)
         : null;
+  const deliveryDays =
+    typeof b.delivery_days === 'number'
+      ? Math.floor(b.delivery_days)
+      : typeof b.delivery_days === 'string'
+        ? parseInt(b.delivery_days, 10)
+        : null;
 
   if (!title || title.length > 200) {
     return c.json({ error: 'invalid_request', message: 'title required (max 200)' }, 400);
@@ -140,6 +148,9 @@ gigsRouter.post('/', authMiddleware, async (c) => {
       400,
     );
   }
+  if (deliveryDays !== null && (isNaN(deliveryDays) || deliveryDays < 1 || deliveryDays > 90)) {
+    return c.json({ error: 'invalid_request', message: 'delivery_days must be between 1 and 90' }, 400);
+  }
 
   const gigId = generateGigId();
   await db.insert(gigs).values({
@@ -150,6 +161,7 @@ gigsRouter.post('/', authMiddleware, async (c) => {
     category,
     pricePoints: pricePoints >= MIN_GIG_PRICE_POINTS ? pricePoints.toString() : null,
     priceUsdc: priceUsdc != null ? priceUsdc.toString() : null,
+    deliveryDays: deliveryDays ?? null,
     status: 'open',
   });
 
@@ -239,6 +251,15 @@ gigsRouter.patch('/:id', authMiddleware, async (c) => {
   if (typeof b.description === 'string') updates.description = b.description.slice(0, 5000);
   if (typeof b.price_points === 'number') updates.pricePoints = b.price_points.toString();
   if (typeof b.price_usdc === 'number') updates.priceUsdc = b.price_usdc.toString();
+  if (b.delivery_days !== undefined) {
+    const days = typeof b.delivery_days === 'number'
+      ? Math.floor(b.delivery_days)
+      : b.delivery_days === null ? null : parseInt(String(b.delivery_days), 10);
+    if (days !== null && (isNaN(days as number) || (days as number) < 1 || (days as number) > 90)) {
+      return c.json({ error: 'invalid_request', message: 'delivery_days must be between 1 and 90' }, 400);
+    }
+    updates.deliveryDays = days;
+  }
   if (Object.keys(updates).length === 0) return c.json(formatGig(gig), 200);
 
   await db.update(gigs).set({ ...updates, updatedAt: new Date() } as Record<string, unknown>).where(eq(gigs.id, id));
@@ -723,4 +744,287 @@ gigsRouter.get('/orders/my', authMiddleware, async (c) => {
     .offset(offset);
 
   return c.json({ orders: list.map(formatOrder), limit, offset });
+});
+
+// ---------------------------------------------------------------------------
+// Private Messaging (Order Threads)
+// ---------------------------------------------------------------------------
+
+/**
+ * Helper: assert caller is buyer or seller for the given order.
+ */
+async function getOrderForParty(orderId: string, agentId: string) {
+  const [order] = await db.select().from(gigOrders).where(eq(gigOrders.id, orderId)).limit(1);
+  if (!order) return { order: null, error: 'not_found' as const };
+  if (order.buyerAgentId !== agentId && order.sellerAgentId !== agentId)
+    return { order: null, error: 'forbidden' as const };
+  return { order, error: null };
+}
+
+/**
+ * POST /v1/gigs/orders/:orderId/messages
+ * Send a private message in an order thread.
+ * Both buyer and seller can participate.
+ */
+gigsRouter.post('/orders/:orderId/messages', authMiddleware, async (c) => {
+  const agent = c.get('agent');
+  const orderId = c.req.param('orderId') ?? '';
+  if (!orderId) return c.json({ error: 'invalid_request', message: 'Missing order id' }, 400);
+
+  const { order, error } = await getOrderForParty(orderId, agent.id);
+  if (error === 'not_found') return c.json({ error: 'not_found', message: 'Order not found' }, 404);
+  if (error === 'forbidden') return c.json({ error: 'forbidden', message: 'Not your order' }, 403);
+
+  // Cannot message on terminal orders (completed/cancelled) — but we allow it for disputes
+  if (order!.status === 'completed' || order!.status === 'cancelled') {
+    return c.json({ error: 'conflict', message: 'Cannot message on a closed order' }, 409);
+  }
+
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: 'invalid_request', message: 'Invalid JSON body' }, 400);
+  }
+
+  const b = body as Record<string, unknown>;
+  const content = typeof b.content === 'string' ? b.content.trim() : '';
+  if (!content || content.length > 4000) {
+    return c.json({ error: 'invalid_request', message: 'content required (max 4000 characters)' }, 400);
+  }
+
+  const msgId = generateGigMessageId();
+  await db.insert(gigMessages).values({
+    id: msgId,
+    orderId,
+    senderAgentId: agent.id,
+    content,
+  });
+
+  const [msg] = await db.select().from(gigMessages).where(eq(gigMessages.id, msgId)).limit(1);
+
+  // Notify the other party
+  const recipientId = order!.buyerAgentId === agent.id ? order!.sellerAgentId : order!.buyerAgentId;
+  fireWebhook(recipientId, 'gig_order.message', {
+    order_id: orderId,
+    gig_id: order!.gigId,
+    message_id: msgId,
+    sender_agent_id: agent.id,
+    content_preview: content.slice(0, 200),
+  });
+
+  return c.json({
+    id: msg!.id,
+    order_id: msg!.orderId,
+    sender_agent_id: msg!.senderAgentId,
+    content: msg!.content,
+    created_at: msg!.createdAt?.toISOString(),
+  }, 201);
+});
+
+/**
+ * GET /v1/gigs/orders/:orderId/messages
+ * List all messages in an order thread (buyer or seller only).
+ */
+gigsRouter.get('/orders/:orderId/messages', authMiddleware, async (c) => {
+  const agent = c.get('agent');
+  const orderId = c.req.param('orderId') ?? '';
+  if (!orderId) return c.json({ error: 'invalid_request', message: 'Missing order id' }, 400);
+
+  const { order, error } = await getOrderForParty(orderId, agent.id);
+  if (error === 'not_found') return c.json({ error: 'not_found', message: 'Order not found' }, 404);
+  if (error === 'forbidden') return c.json({ error: 'forbidden', message: 'Not your order' }, 403);
+
+  const limit = Math.min(parseInt(c.req.query('limit') ?? '100', 10) || 100, 200);
+  const offset = Math.max(0, parseInt(c.req.query('offset') ?? '0', 10) || 0);
+
+  const msgs = await db
+    .select()
+    .from(gigMessages)
+    .where(eq(gigMessages.orderId, orderId))
+    .orderBy(desc(gigMessages.createdAt))
+    .limit(limit)
+    .offset(offset);
+
+  return c.json({
+    order_id: orderId,
+    messages: msgs.map((m) => ({
+      id: m.id,
+      order_id: m.orderId,
+      sender_agent_id: m.senderAgentId,
+      content: m.content,
+      created_at: m.createdAt?.toISOString(),
+    })),
+    limit,
+    offset,
+  });
+});
+
+// ---------------------------------------------------------------------------
+// File Attachments
+// ---------------------------------------------------------------------------
+
+/**
+ * POST /v1/gigs/orders/:orderId/attachments
+ * Upload a file attachment for a gig order.
+ *
+ * Request: multipart/form-data
+ *   file     — the file data
+ *   filename — original filename (optional, falls back to Content-Disposition)
+ *
+ * Alternatively: JSON body with base64-encoded file:
+ *   { filename, mime_type, data_base64 }
+ *
+ * Requires SUPABASE_URL and SUPABASE_SERVICE_KEY env vars.
+ */
+gigsRouter.post('/orders/:orderId/attachments', authMiddleware, async (c) => {
+  const agent = c.get('agent');
+  const orderId = c.req.param('orderId') ?? '';
+  if (!orderId) return c.json({ error: 'invalid_request', message: 'Missing order id' }, 400);
+
+  if (!isStorageConfigured()) {
+    return c.json({ error: 'service_unavailable', message: 'File storage is not configured on this server' }, 503);
+  }
+
+  const { order, error } = await getOrderForParty(orderId, agent.id);
+  if (error === 'not_found') return c.json({ error: 'not_found', message: 'Order not found' }, 404);
+  if (error === 'forbidden') return c.json({ error: 'forbidden', message: 'Not your order' }, 403);
+
+  // Parse: accept JSON with base64 data or multipart/form-data
+  const contentType = c.req.header('content-type') ?? '';
+  let fileBuffer: Buffer;
+  let fileName: string;
+  let mimeType: string;
+
+  if (contentType.includes('multipart/form-data')) {
+    // Multipart upload
+    let formData: FormData;
+    try {
+      formData = await c.req.formData();
+    } catch {
+      return c.json({ error: 'invalid_request', message: 'Failed to parse multipart form data' }, 400);
+    }
+    const fileEntry = formData.get('file');
+    if (!fileEntry || !(fileEntry instanceof File)) {
+      return c.json({ error: 'invalid_request', message: 'file field required in multipart body' }, 400);
+    }
+    const nameEntry = formData.get('filename');
+    fileName = typeof nameEntry === 'string' ? nameEntry.trim() : fileEntry.name;
+    mimeType = fileEntry.type || 'application/octet-stream';
+    fileBuffer = Buffer.from(await fileEntry.arrayBuffer());
+  } else {
+    // JSON with base64 data
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: 'invalid_request', message: 'Invalid JSON body' }, 400);
+    }
+    const b = body as Record<string, unknown>;
+    fileName = typeof b.filename === 'string' ? b.filename.trim() : '';
+    mimeType = typeof b.mime_type === 'string' ? b.mime_type.trim() : 'application/octet-stream';
+    const dataBase64 = typeof b.data_base64 === 'string' ? b.data_base64 : '';
+    if (!fileName) return c.json({ error: 'invalid_request', message: 'filename required' }, 400);
+    if (!dataBase64) return c.json({ error: 'invalid_request', message: 'data_base64 required' }, 400);
+    try {
+      fileBuffer = Buffer.from(dataBase64, 'base64');
+    } catch {
+      return c.json({ error: 'invalid_request', message: 'data_base64 is not valid base64' }, 400);
+    }
+  }
+
+  if (!ALLOWED_MIME_TYPES.has(mimeType)) {
+    return c.json({
+      error: 'invalid_request',
+      message: `Unsupported file type: ${mimeType}. Allowed: images, PDF, text, CSV, JSON, ZIP, MP4`,
+    }, 415);
+  }
+
+  if (fileBuffer.length === 0) {
+    return c.json({ error: 'invalid_request', message: 'File is empty' }, 400);
+  }
+  if (fileBuffer.length > MAX_FILE_SIZE_BYTES) {
+    return c.json({ error: 'invalid_request', message: `File too large. Max size: ${MAX_FILE_SIZE_BYTES / (1024 * 1024)} MB` }, 413);
+  }
+
+  const attachId = generateGigAttachmentId();
+  // Sanitize filename for storage key
+  const safeFileName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 100);
+  const storageKey = `orders/${orderId}/${attachId}_${safeFileName}`;
+
+  let publicUrl: string;
+  try {
+    publicUrl = await uploadToStorage(storageKey, fileBuffer, mimeType);
+  } catch (err) {
+    console.error('Storage upload error:', err);
+    return c.json({ error: 'storage_error', message: 'File upload failed. Please try again.' }, 502);
+  }
+
+  await db.insert(gigAttachments).values({
+    id: attachId,
+    orderId,
+    uploaderAgentId: agent.id,
+    fileName,
+    mimeType,
+    fileSizeBytes: fileBuffer.length,
+    storageKey,
+    publicUrl,
+  });
+
+  const [att] = await db.select().from(gigAttachments).where(eq(gigAttachments.id, attachId)).limit(1);
+
+  // Notify the other party
+  const recipientId = order!.buyerAgentId === agent.id ? order!.sellerAgentId : order!.buyerAgentId;
+  fireWebhook(recipientId, 'gig_order.attachment', {
+    order_id: orderId,
+    gig_id: order!.gigId,
+    attachment_id: attachId,
+    uploader_agent_id: agent.id,
+    file_name: fileName,
+  });
+
+  return c.json({
+    id: att!.id,
+    order_id: att!.orderId,
+    uploader_agent_id: att!.uploaderAgentId,
+    file_name: att!.fileName,
+    mime_type: att!.mimeType,
+    file_size_bytes: att!.fileSizeBytes,
+    public_url: att!.publicUrl,
+    created_at: att!.createdAt?.toISOString(),
+  }, 201);
+});
+
+/**
+ * GET /v1/gigs/orders/:orderId/attachments
+ * List all file attachments for a gig order (buyer or seller only).
+ */
+gigsRouter.get('/orders/:orderId/attachments', authMiddleware, async (c) => {
+  const agent = c.get('agent');
+  const orderId = c.req.param('orderId') ?? '';
+  if (!orderId) return c.json({ error: 'invalid_request', message: 'Missing order id' }, 400);
+
+  const { error } = await getOrderForParty(orderId, agent.id);
+  if (error === 'not_found') return c.json({ error: 'not_found', message: 'Order not found' }, 404);
+  if (error === 'forbidden') return c.json({ error: 'forbidden', message: 'Not your order' }, 403);
+
+  const attachments = await db
+    .select()
+    .from(gigAttachments)
+    .where(eq(gigAttachments.orderId, orderId))
+    .orderBy(desc(gigAttachments.createdAt));
+
+  return c.json({
+    order_id: orderId,
+    attachments: attachments.map((a) => ({
+      id: a.id,
+      order_id: a.orderId,
+      uploader_agent_id: a.uploaderAgentId,
+      file_name: a.fileName,
+      mime_type: a.mimeType,
+      file_size_bytes: a.fileSizeBytes,
+      public_url: a.publicUrl,
+      created_at: a.createdAt?.toISOString(),
+    })),
+  });
 });
