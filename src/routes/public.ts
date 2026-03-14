@@ -119,6 +119,7 @@ publicRouter.get('/stats', async (c) => {
   const [supply] = await db
     .select({ total: sql<string>`coalesce(sum(balance_points), 0)` })
     .from(agents)
+    .where(ne(agents.id, 'agt_system'))
     .limit(1);
 
   // x402 USDC payment stats
