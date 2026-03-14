@@ -11,6 +11,10 @@ export const gigs = pgTable('gigs', {
   pricePoints: decimal('price_points', { precision: 12, scale: 2 }),      // Points price
   priceUsdc: decimal('price_usdc', { precision: 12, scale: 6 }),          // USDC price
   status: varchar('status', { length: 20 }).default('open'),               // open | filled | canceled
+  /** Supabase Storage path in the gig-files bucket (e.g. preview image / spec PDF) */
+  fileStoragePath: text('file_storage_path'),
+  /** Public URL for the stored file (populated after upload) */
+  fileUrl: text('file_url'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
 }, (table) => [

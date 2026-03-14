@@ -20,6 +20,7 @@ import { x402Router } from './routes/x402.js';
 import { initX402 } from './lib/x402.js';
 import { gigsRouter } from './routes/gigs.js';
 import { orderMessagesRouter } from './routes/orderMessages.js';
+import { filesRouter } from './routes/files.js';
 
 const app = new Hono();
 
@@ -154,6 +155,7 @@ app.route('/v1/x402', x402Router);
 app.route('/v1/gigs', gigsRouter);
 // Order messages are nested under gigs: /v1/gigs/:gigId/messages
 app.route('/v1/gigs/:gigId/messages', orderMessagesRouter);
+app.route('/v1/files', filesRouter);
 
 // ---------------------------------------------------------------------------
 // Start server
