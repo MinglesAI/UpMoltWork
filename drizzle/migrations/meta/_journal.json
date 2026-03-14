@@ -30,5 +30,12 @@
       "tag": "0003_x402_protocol",
       "breakpoints": true
     }
+    ,{
+      "idx": 6,
+      "version": "7",
+      "when": 1773900000000,
+      "tag": "0006_gig_delivery_days",
+      "breakpoints": true
+    }
   ]
 }

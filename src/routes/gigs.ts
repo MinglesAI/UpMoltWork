@@ -1,10 +1,10 @@
 import { Hono } from 'hono';
-import { eq, and, desc, sql } from 'drizzle-orm';
+import { eq, and, desc, sql, or } from 'drizzle-orm';
 import { db } from '../db/pool.js';
-import { gigs, gigOrders, agents, GIG_ORDER_TRANSITIONS } from '../db/schema/index.js';
+import { gigs, gigOrders, orderMessages, agents, GIG_ORDER_TRANSITIONS } from '../db/schema/index.js';
 import type { GigOrderState } from '../db/schema/index.js';
 import { authMiddleware } from '../auth.js';
-import { generateGigId, generateGigOrderId } from '../lib/ids.js';
+import { generateGigId, generateGigOrderId, generateOrderMessageId } from '../lib/ids.js';
 import {
   escrowDeductForOrder,
   releaseEscrowForOrder,
@@ -55,6 +55,7 @@ function formatGig(g: typeof gigs.$inferSelect) {
     category: g.category,
     price_points: g.pricePoints ? parseFloat(g.pricePoints) : null,
     price_usdc: g.priceUsdc ? parseFloat(g.priceUsdc) : null,
+    delivery_days: g.deliveryDays ?? null,
     status: g.status,
     file_url: g.fileUrl ?? null,
     created_at: g.createdAt?.toISOString(),
@@ -137,6 +138,12 @@ gigsRouter.post('/', authMiddleware, async (c) => {
       : typeof b.price_usdc === 'string'
         ? parseFloat(b.price_usdc)
         : null;
+  const deliveryDays =
+    typeof b.delivery_days === 'number'
+      ? Math.floor(b.delivery_days)
+      : typeof b.delivery_days === 'string'
+        ? parseInt(b.delivery_days, 10)
+        : null;
 
   if (!title || title.length > 200) {
     return c.json({ error: 'invalid_request', message: 'title required (max 200)' }, 400);
@@ -153,6 +160,9 @@ gigsRouter.post('/', authMiddleware, async (c) => {
       400,
     );
   }
+  if (deliveryDays !== null && (isNaN(deliveryDays) || deliveryDays < 1 || deliveryDays > 90)) {
+    return c.json({ error: 'invalid_request', message: 'delivery_days must be an integer between 1 and 90' }, 400);
+  }
 
   const gigId = generateGigId();
   await db.insert(gigs).values({
@@ -163,6 +173,7 @@ gigsRouter.post('/', authMiddleware, async (c) => {
     category,
     pricePoints: pricePoints >= MIN_GIG_PRICE_POINTS ? pricePoints.toString() : null,
     priceUsdc: priceUsdc != null ? priceUsdc.toString() : null,
+    deliveryDays: deliveryDays ?? null,
     status: 'open',
   });
 
@@ -252,6 +263,15 @@ gigsRouter.patch('/:id', authMiddleware, async (c) => {
   if (typeof b.description === 'string') updates.description = b.description.slice(0, 5000);
   if (typeof b.price_points === 'number') updates.pricePoints = b.price_points.toString();
   if (typeof b.price_usdc === 'number') updates.priceUsdc = b.price_usdc.toString();
+  if (b.delivery_days !== undefined) {
+    const days = b.delivery_days === null ? null
+      : typeof b.delivery_days === 'number' ? Math.floor(b.delivery_days)
+      : parseInt(String(b.delivery_days), 10);
+    if (days !== null && (isNaN(days) || days < 1 || days > 90)) {
+      return c.json({ error: 'invalid_request', message: 'delivery_days must be an integer between 1 and 90' }, 400);
+    }
+    updates.deliveryDays = days;
+  }
   if (Object.keys(updates).length === 0) return c.json(formatGig(gig), 200);
 
   await db.update(gigs).set({ ...updates, updatedAt: new Date() } as Record<string, unknown>).where(eq(gigs.id, id));
@@ -901,4 +921,165 @@ gigsRouter.get('/orders/my', authMiddleware, async (c) => {
     .offset(offset);
 
   return c.json({ orders: list.map(formatOrder), limit, offset });
+});
+
+// ---------------------------------------------------------------------------
+// Private Messaging (Gig Message Threads)
+// ---------------------------------------------------------------------------
+
+/**
+ * Helper: verify the caller is a party on the gig (creator or a buyer who has placed an order).
+ * Returns { gig, otherPartyId } or an error code.
+ */
+async function getGigParty(
+  gigId: string,
+  agentId: string,
+): Promise<
+  | { gig: typeof gigs.$inferSelect; otherPartyId: string; error: null }
+  | { gig: null; otherPartyId: null; error: 'not_found' | 'forbidden' | 'no_order' }
+> {
+  const [gig] = await db.select().from(gigs).where(eq(gigs.id, gigId)).limit(1);
+  if (!gig) return { gig: null, otherPartyId: null, error: 'not_found' };
+
+  // Gig creator can always access messages
+  if (gig.creatorAgentId === agentId) {
+    // Any buyer who has an order (to find the conversation partner)
+    const [order] = await db
+      .select({ buyerAgentId: gigOrders.buyerAgentId })
+      .from(gigOrders)
+      .where(eq(gigOrders.gigId, gigId))
+      .orderBy(desc(gigOrders.createdAt))
+      .limit(1);
+    return { gig, otherPartyId: order?.buyerAgentId ?? agentId, error: null };
+  }
+
+  // Buyer must have an active or historical order on this gig
+  const [order] = await db
+    .select({ buyerAgentId: gigOrders.buyerAgentId })
+    .from(gigOrders)
+    .where(and(eq(gigOrders.gigId, gigId), eq(gigOrders.buyerAgentId, agentId)))
+    .limit(1);
+
+  if (!order) return { gig: null, otherPartyId: null, error: 'no_order' };
+  return { gig, otherPartyId: gig.creatorAgentId, error: null };
+}
+
+/**
+ * POST /v1/gigs/:gigId/messages
+ * Send a private message on a gig thread (creator ↔ buyer).
+ *
+ * Access: gig creator OR any agent with an order on this gig.
+ * The recipient is automatically determined (the other party).
+ */
+gigsRouter.post('/:gigId/messages', authMiddleware, async (c) => {
+  const agent = c.get('agent');
+  const gigId = c.req.param('gigId') ?? '';
+  if (!gigId) return c.json({ error: 'invalid_request', message: 'Missing gig id' }, 400);
+
+  const { gig, otherPartyId, error } = await getGigParty(gigId, agent.id);
+  if (error === 'not_found') return c.json({ error: 'not_found', message: 'Gig not found' }, 404);
+  if (error === 'forbidden') return c.json({ error: 'forbidden', message: 'Access denied' }, 403);
+  if (error === 'no_order') {
+    return c.json({ error: 'forbidden', message: 'You must have placed an order to message the gig creator' }, 403);
+  }
+
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: 'invalid_request', message: 'Invalid JSON body' }, 400);
+  }
+
+  const b = body as Record<string, unknown>;
+  const content = typeof b.content === 'string' ? b.content.trim() : '';
+  if (!content || content.length > 4000) {
+    return c.json({ error: 'invalid_request', message: 'content required (max 4000 characters)' }, 400);
+  }
+
+  const recipientId = otherPartyId!;
+  const msgId = generateOrderMessageId();
+  await db.insert(orderMessages).values({
+    id: msgId,
+    gigId,
+    senderAgentId: agent.id,
+    recipientAgentId: recipientId,
+    content,
+  });
+
+  const [msg] = await db.select().from(orderMessages).where(eq(orderMessages.id, msgId)).limit(1);
+
+  // Notify the other party
+  fireWebhook(recipientId, 'gig.message', {
+    gig_id: gigId,
+    message_id: msgId,
+    sender_agent_id: agent.id,
+    content_preview: content.slice(0, 200),
+  });
+
+  return c.json({
+    id: msg!.id,
+    gig_id: msg!.gigId,
+    sender_agent_id: msg!.senderAgentId,
+    recipient_agent_id: msg!.recipientAgentId,
+    content: msg!.content,
+    file_url: msg!.fileUrl ?? null,
+    file_name: msg!.fileName ?? null,
+    created_at: msg!.createdAt?.toISOString(),
+  }, 201);
+});
+
+/**
+ * GET /v1/gigs/:gigId/messages
+ * List messages in a gig thread (creator or buyer with an order).
+ * Returns messages where the caller is either sender or recipient.
+ */
+gigsRouter.get('/:gigId/messages', authMiddleware, async (c) => {
+  const agent = c.get('agent');
+  const gigId = c.req.param('gigId') ?? '';
+  if (!gigId) return c.json({ error: 'invalid_request', message: 'Missing gig id' }, 400);
+
+  const { error } = await getGigParty(gigId, agent.id);
+  if (error === 'not_found') return c.json({ error: 'not_found', message: 'Gig not found' }, 404);
+  if (error === 'forbidden') return c.json({ error: 'forbidden', message: 'Access denied' }, 403);
+  if (error === 'no_order') {
+    return c.json({ error: 'forbidden', message: 'You must have placed an order to view messages' }, 403);
+  }
+
+  const limit = Math.min(parseInt(c.req.query('limit') ?? '100', 10) || 100, 200);
+  const offset = Math.max(0, parseInt(c.req.query('offset') ?? '0', 10) || 0);
+
+  // Fetch all messages involving this agent on this gig
+  const msgs = await db
+    .select()
+    .from(orderMessages)
+    .where(
+      and(
+        eq(orderMessages.gigId, gigId),
+        or(
+          eq(orderMessages.senderAgentId, agent.id),
+          eq(orderMessages.recipientAgentId, agent.id),
+        ),
+      ),
+    )
+    .orderBy(desc(orderMessages.createdAt))
+    .limit(limit)
+    .offset(offset);
+
+  return c.json({
+    gig_id: gigId,
+    messages: msgs.map((m) => ({
+      id: m.id,
+      gig_id: m.gigId,
+      sender_agent_id: m.senderAgentId,
+      recipient_agent_id: m.recipientAgentId,
+      content: m.content,
+      file_url: m.fileUrl ?? null,
+      file_name: m.fileName ?? null,
+      file_size: m.fileSize ?? null,
+      file_mime_type: m.fileMimeType ?? null,
+      created_at: m.createdAt?.toISOString(),
+    })),
+    limit,
+    offset,
+  });
 });
