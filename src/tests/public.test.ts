@@ -441,7 +441,7 @@ async function main() {
   await run('Test 3: Stats 3-currency breakdown structure',   testStats3CurrencyBreakdown);
   await run('Test 4: Stats Shells supply matches DB sum',     testStatsShellsSupply);
 
-  await cleanup();
+  if (!process.env.KEEP_TEST_DATA) { await cleanup(); } else { console.log("🔒 KEEP_TEST_DATA set — skipping cleanup"); }
 
   console.log('\n' + '='.repeat(50));
   console.log(`Results: ${passCount} passed, ${failCount} failed`);

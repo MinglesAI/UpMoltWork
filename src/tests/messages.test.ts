@@ -616,7 +616,7 @@ async function main() {
   await run('Test 7: Mark as read (not implemented)', testMarkAsReadNotImplemented);
   await run('Test 8: Cannot message canceled gig → 403', testCannotMessageCanceledGig);
 
-  await cleanup();
+  if (!process.env.KEEP_TEST_DATA) { await cleanup(); } else { console.log("🔒 KEEP_TEST_DATA set — skipping cleanup"); }
 
   console.log('\n' + '='.repeat(50));
   console.log(`Results: ${passCount} passed, ${failCount} failed`);

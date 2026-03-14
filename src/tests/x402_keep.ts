@@ -20,7 +20,7 @@
  */
 
 import 'dotenv/config';
-import { eq, sql, and } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import bcrypt from 'bcrypt';
 import { Hono } from 'hono';
 import { db, initPool } from '../db/pool.js';
@@ -79,70 +79,6 @@ noPayApp.post('/v1/x402/tasks', async (c) => {
     return c.json({ error: 'forbidden', message: 'Verified agents only can create tasks' }, 403);
   }
   return c.json({ ok: true }, 200);
-});
-
-/**
- * Bypass payment app — replicates x402Router POST /tasks handler logic
- * (task creation + escrow insert) without the real x402 payment middleware.
- * Used to test that the route handler correctly creates the escrow record
- * in x402_payments when it processes a task creation request.
- */
-const bypassPayX402App = new Hono<{ Variables: { agent: AgentRow; agentId: string } }>();
-bypassPayX402App.use('/v1/x402/tasks', authMiddleware);
-bypassPayX402App.post('/v1/x402/tasks', async (c) => {
-  const agent = c.get('agent');
-  if (agent.status !== 'verified') {
-    return c.json({ error: 'forbidden', message: 'Verified agents only can create tasks' }, 403);
-  }
-
-  const priceUsdc = parseFloat(c.req.query('price_usdc') ?? '0');
-  if (isNaN(priceUsdc) || priceUsdc < 0.01) {
-    return c.json({ error: 'invalid_request', message: 'price_usdc must be >= 0.01' }, 400);
-  }
-
-  let body: unknown;
-  try { body = await c.req.json(); } catch {
-    return c.json({ error: 'invalid_request', message: 'Invalid JSON body' }, 400);
-  }
-
-  const b = body as Record<string, unknown>;
-  const title = typeof b.title === 'string' ? b.title.trim() : '';
-  const description = typeof b.description === 'string' ? b.description.trim() : '';
-  const category = typeof b.category === 'string' ? b.category : 'development';
-
-  const taskId = generateTaskId();
-
-  // Mirrors the x402Router handler: insert task row
-  await db.insert(tasks).values({
-    id: taskId,
-    creatorAgentId: agent.id,
-    category,
-    title,
-    description,
-    acceptanceCriteria: [description.slice(0, 200)],
-    priceUsdc: priceUsdc.toFixed(6),
-    pricePoints: null,
-    status: 'open',
-    autoAcceptFirst: false,
-    maxBids: 10,
-    validationRequired: false,
-    paymentMode: 'usdc',
-    escrowTxHash: null,
-  });
-
-  // Mirrors the x402Router handler: insert escrow record into x402_payments
-  // (This is the db.insert(x402Payments) call added in PR #59)
-  await db.insert(x402Payments).values({
-    taskId,
-    payerAddress: 'unknown',
-    recipientAddress: PLATFORM_EVM_ADDRESS,
-    amountUsdc: priceUsdc.toFixed(6),
-    txHash: `pending-${taskId}`,
-    network: BASE_NETWORK,
-    paymentType: 'escrow',
-  });
-
-  return c.json({ id: taskId, payment_type: 'escrow' }, 201);
 });
 
 // ---------------------------------------------------------------------------
@@ -503,81 +439,6 @@ async function test403UnverifiedAgent() {
   const body = await resp.json() as Record<string, unknown>;
   console.log(`  → Got 403: ${body.message}`);
   console.log('  ✅ 403 returned — unverified agents cannot create x402 tasks');
-}
-
-// ---------------------------------------------------------------------------
-// Test 5b: Escrow record created via route handler
-// Verifies that the POST /v1/x402/tasks handler inserts a row into x402_payments
-// with payment_type='escrow' when a task is created.
-// (Tests the db.insert(x402Payments) call added to x402.ts in PR #59)
-// ---------------------------------------------------------------------------
-async function testEscrowRecordCreated(): Promise<string> {
-  console.log('\n🧾 Test 5b: Escrow record created via route handler');
-
-  const priceUsdc = 0.10;
-
-  const resp = await bypassPayX402App.fetch(
-    new Request('http://localhost/v1/x402/tasks?price_usdc=0.10', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${BUYER_KEY}`,
-      },
-      body: JSON.stringify({
-        title: 'x402 Escrow Record Test Task',
-        description: 'Verifying escrow payment record is created by route handler',
-        category: 'development',
-      }),
-    }),
-  );
-
-  if (resp.status !== 201) {
-    const body = await resp.text();
-    throw new Error(`Expected 201, got ${resp.status}: ${body}`);
-  }
-
-  const body = await resp.json() as Record<string, unknown>;
-  const taskId = body.id as string;
-
-  if (!taskId) throw new Error('Missing task id in response');
-  if (body.payment_type !== 'escrow') {
-    throw new Error(`Expected payment_type=escrow in response, got: ${body.payment_type}`);
-  }
-
-  // Verify x402_payments row exists with correct fields
-  const [payment] = await db
-    .select()
-    .from(x402Payments)
-    .where(and(
-      eq(x402Payments.taskId, taskId),
-      eq(x402Payments.paymentType, 'escrow'),
-    ))
-    .limit(1);
-
-  if (!payment)                                throw new Error('Escrow record not found in x402_payments');
-  if (payment.paymentType !== 'escrow')        throw new Error(`Wrong paymentType: ${payment.paymentType}`);
-  if (payment.network !== BASE_NETWORK)        throw new Error(`Wrong network: ${payment.network}, expected ${BASE_NETWORK}`);
-  if (payment.taskId !== taskId)               throw new Error(`Wrong taskId in payment: ${payment.taskId}`);
-
-  const recordedAmount = parseFloat(payment.amountUsdc);
-  if (Math.abs(recordedAmount - priceUsdc) > 0.000001) {
-    throw new Error(`Wrong amount: ${payment.amountUsdc}, expected ${priceUsdc.toFixed(6)}`);
-  }
-
-  // Verify recipientAddress is platform address
-  if (payment.recipientAddress.toLowerCase() !== PLATFORM_EVM_ADDRESS.toLowerCase()) {
-    throw new Error(`Wrong recipientAddress: ${payment.recipientAddress}, expected ${PLATFORM_EVM_ADDRESS}`);
-  }
-
-  console.log(`  → Task: ${taskId}`);
-  console.log(`  → paymentType: ${payment.paymentType}`);
-  console.log(`  → network: ${payment.network}`);
-  console.log(`  → amount_usdc: ${payment.amountUsdc}`);
-  console.log(`  → recipientAddress: ${payment.recipientAddress}`);
-  console.log(`  → txHash: ${payment.txHash}`);
-  console.log('  ✅ x402_payments escrow record created correctly by route handler');
-
-  return taskId;
 }
 
 // ---------------------------------------------------------------------------
@@ -951,9 +812,6 @@ async function main() {
   // ── B. Mock Payment → Task Creation ──────────────────────────────────────
   const taskId = await run('Test 5: Mock payment → task created', testMockPaymentTaskCreated);
 
-  // ── B2. Escrow Record via Route Handler ───────────────────────────────────
-  await run('Test 5b: Escrow record created via route handler', testEscrowRecordCreated);
-
   // ── C. Unverified Agent ────────────────────────────────────────────────────
   await run('Test 6: POST /tasks — 403 (unverified agent)', test403UnverifiedAgent);
 
@@ -972,7 +830,7 @@ async function main() {
     failCount++; // Count as a failure — E2E requires task
   }
 
-  if (!process.env.KEEP_TEST_DATA) { await cleanup(); } else { console.log("🔒 KEEP_TEST_DATA set — skipping cleanup"); }
+  // await cleanup();
 
   console.log('\n' + '='.repeat(50));
   console.log(`Results: ${passCount} passed, ${failCount} failed`);

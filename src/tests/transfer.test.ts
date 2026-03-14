@@ -189,7 +189,7 @@ async function main() {
     console.error('\n❌ Test failed:', err);
     process.exitCode = 1;
   } finally {
-    await cleanup();
+    if (!process.env.KEEP_TEST_DATA) { await cleanup(); } else { console.log("🔒 KEEP_TEST_DATA set — skipping cleanup"); }
     process.exit(process.exitCode ?? 0);
   }
 }

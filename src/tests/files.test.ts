@@ -849,7 +849,7 @@ async function main() {
     void orderFileId;
   }
 
-  await cleanup();
+  if (!process.env.KEEP_TEST_DATA) { await cleanup(); } else { console.log("🔒 KEEP_TEST_DATA set — skipping cleanup"); }
 
   console.log('\n' + '='.repeat(50));
   console.log(`Results: ${passCount} passed, ${failCount} failed, ${skipCount} skipped`);

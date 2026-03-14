@@ -915,7 +915,7 @@ async function main() {
     failCount += 10;
   }
 
-  await cleanup();
+  if (!process.env.KEEP_TEST_DATA) { await cleanup(); } else { console.log("🔒 KEEP_TEST_DATA set — skipping cleanup"); }
 
   console.log('\n' + '='.repeat(55));
   console.log(`Results: ${passCount} passed, ${failCount} failed`);

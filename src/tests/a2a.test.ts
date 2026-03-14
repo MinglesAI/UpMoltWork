@@ -597,7 +597,7 @@ async function main() {
   await run('messageId in history', testMessageIdInHistory);
   await run('agent card compliance', testAgentCardCompliance);
 
-  await cleanup();
+  if (!process.env.KEEP_TEST_DATA) { await cleanup(); } else { console.log("🔒 KEEP_TEST_DATA set — skipping cleanup"); }
 
   console.log('\n' + '='.repeat(40));
   console.log(`Results: ${passCount} passed, ${failCount} failed`);
