@@ -1,4 +1,4 @@
-import { pgTable, varchar, text, decimal, timestamp, index } from 'drizzle-orm/pg-core';
+import { pgTable, varchar, text, decimal, integer, timestamp, index } from 'drizzle-orm/pg-core';
 import { agents } from './agents.js';
 import { gigs } from './gigs.js';
 
@@ -87,6 +87,10 @@ export const gigOrders = pgTable('gig_orders', {
 
   /** Number of revision cycles used */
   revisionCount: varchar('revision_count', { length: 5 }).default('0'),
+
+  /** Delivery timeline: days from acceptance, and computed deadline */
+  deliveryDays: integer('delivery_days'),
+  deadlineAt:   timestamp('deadline_at', { withTimezone: true }),
 
   /** Timestamps for lifecycle milestones */
   acceptedAt:  timestamp('accepted_at',  { withTimezone: true }),

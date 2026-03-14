@@ -1,10 +1,10 @@
 import { Hono } from 'hono';
-import { eq, and, desc, sql } from 'drizzle-orm';
+import { eq, and, desc, asc, sql } from 'drizzle-orm';
 import { db } from '../db/pool.js';
-import { gigs, gigOrders, agents, GIG_ORDER_TRANSITIONS } from '../db/schema/index.js';
+import { gigs, gigOrders, gigMessages, agents, GIG_ORDER_TRANSITIONS } from '../db/schema/index.js';
 import type { GigOrderState } from '../db/schema/index.js';
 import { authMiddleware } from '../auth.js';
-import { generateGigId, generateGigOrderId } from '../lib/ids.js';
+import { generateGigId, generateGigOrderId, generateGigMessageId } from '../lib/ids.js';
 import {
   escrowDeductForOrder,
   releaseEscrowForOrder,
@@ -12,6 +12,12 @@ import {
 } from '../lib/transfer.js';
 import { fireWebhook } from '../lib/webhooks.js';
 import { updateReputation, REPUTATION } from '../lib/reputation.js';
+import {
+  uploadFile,
+  isStorageConfigured,
+  MAX_FILE_SIZE_BYTES,
+  ALLOWED_MIME_TYPES,
+} from '../lib/storage.js';
 import type { AgentRow } from '../db/schema/index.js';
 
 type AppVariables = { agent: AgentRow; agentId: string };
@@ -44,6 +50,7 @@ function formatGig(g: typeof gigs.$inferSelect) {
     category: g.category,
     price_points: g.pricePoints ? parseFloat(g.pricePoints) : null,
     price_usdc: g.priceUsdc ? parseFloat(g.priceUsdc) : null,
+    delivery_days: g.deliveryDays ?? null,
     status: g.status,
     created_at: g.createdAt?.toISOString(),
     updated_at: g.updatedAt?.toISOString(),
@@ -61,6 +68,8 @@ function formatOrder(o: typeof gigOrders.$inferSelect) {
     payment_mode: o.paymentMode,
     status: o.status,
     requirements: o.requirements,
+    delivery_days: o.deliveryDays ?? null,
+    deadline_at: o.deadlineAt?.toISOString() ?? null,
     delivery_url: o.deliveryUrl,
     delivery_content: o.deliveryContent ? o.deliveryContent.slice(0, 500) : null,
     delivery_notes: o.deliveryNotes,
@@ -124,6 +133,12 @@ gigsRouter.post('/', authMiddleware, async (c) => {
       : typeof b.price_usdc === 'string'
         ? parseFloat(b.price_usdc)
         : null;
+  const deliveryDays =
+    typeof b.delivery_days === 'number'
+      ? Math.max(1, Math.floor(b.delivery_days))
+      : typeof b.delivery_days === 'string'
+        ? Math.max(1, parseInt(b.delivery_days, 10))
+        : null;
 
   if (!title || title.length > 200) {
     return c.json({ error: 'invalid_request', message: 'title required (max 200)' }, 400);
@@ -140,6 +155,9 @@ gigsRouter.post('/', authMiddleware, async (c) => {
       400,
     );
   }
+  if (deliveryDays !== null && (isNaN(deliveryDays) || deliveryDays < 1 || deliveryDays > 365)) {
+    return c.json({ error: 'invalid_request', message: 'delivery_days must be between 1 and 365' }, 400);
+  }
 
   const gigId = generateGigId();
   await db.insert(gigs).values({
@@ -150,6 +168,7 @@ gigsRouter.post('/', authMiddleware, async (c) => {
     category,
     pricePoints: pricePoints >= MIN_GIG_PRICE_POINTS ? pricePoints.toString() : null,
     priceUsdc: priceUsdc != null ? priceUsdc.toString() : null,
+    deliveryDays: deliveryDays ?? null,
     status: 'open',
   });
 
@@ -239,6 +258,10 @@ gigsRouter.patch('/:id', authMiddleware, async (c) => {
   if (typeof b.description === 'string') updates.description = b.description.slice(0, 5000);
   if (typeof b.price_points === 'number') updates.pricePoints = b.price_points.toString();
   if (typeof b.price_usdc === 'number') updates.priceUsdc = b.price_usdc.toString();
+  if (typeof b.delivery_days === 'number') {
+    const dd = Math.max(1, Math.floor(b.delivery_days));
+    if (dd >= 1 && dd <= 365) updates.deliveryDays = dd;
+  }
   if (Object.keys(updates).length === 0) return c.json(formatGig(gig), 200);
 
   await db.update(gigs).set({ ...updates, updatedAt: new Date() } as Record<string, unknown>).where(eq(gigs.id, id));
@@ -341,6 +364,9 @@ gigsRouter.post('/:gigId/orders', authMiddleware, async (c) => {
     throw err;
   }
 
+  // Snapshot delivery days from gig at order time
+  const orderDeliveryDays = gig.deliveryDays ?? null;
+
   await db.insert(gigOrders).values({
     id: orderId,
     gigId,
@@ -351,6 +377,7 @@ gigsRouter.post('/:gigId/orders', authMiddleware, async (c) => {
     paymentMode: 'points',
     status: 'pending',
     requirements,
+    deliveryDays: orderDeliveryDays,
     revisionCount: '0',
   });
 
@@ -422,14 +449,30 @@ gigsRouter.post('/orders/:orderId/accept', authMiddleware, async (c) => {
   const transitionError = validateTransition(order.status!, 'accepted');
   if (transitionError) return c.json({ error: 'conflict', message: transitionError }, 409);
 
+  // Compute deadline_at from delivery_days (if set) when seller accepts
+  const acceptedAt = new Date();
+  let deadlineAt: Date | null = null;
+  if (order.deliveryDays) {
+    deadlineAt = new Date(acceptedAt.getTime() + order.deliveryDays * 24 * 60 * 60 * 1000);
+  }
+
   await db.update(gigOrders).set({
     status: 'accepted',
-    acceptedAt: new Date(),
+    acceptedAt,
+    deadlineAt: deadlineAt ?? undefined,
     updatedAt: new Date(),
   }).where(eq(gigOrders.id, orderId));
 
-  fireWebhook(order.buyerAgentId, 'gig_order.accepted', { order_id: orderId, gig_id: order.gigId });
-  fireWebhook(agent.id, 'gig_order.accepted', { order_id: orderId, gig_id: order.gigId });
+  fireWebhook(order.buyerAgentId, 'gig_order.accepted', {
+    order_id: orderId,
+    gig_id: order.gigId,
+    deadline_at: deadlineAt?.toISOString() ?? null,
+  });
+  fireWebhook(agent.id, 'gig_order.accepted', {
+    order_id: orderId,
+    gig_id: order.gigId,
+    deadline_at: deadlineAt?.toISOString() ?? null,
+  });
 
   const [updated] = await db.select().from(gigOrders).where(eq(gigOrders.id, orderId)).limit(1);
   return c.json(formatOrder(updated!), 200);
@@ -723,4 +766,262 @@ gigsRouter.get('/orders/my', authMiddleware, async (c) => {
     .offset(offset);
 
   return c.json({ orders: list.map(formatOrder), limit, offset });
+});
+
+// ---------------------------------------------------------------------------
+// Private Messaging
+// ---------------------------------------------------------------------------
+
+/**
+ * POST /v1/gigs/orders/:orderId/messages
+ * Send a private message in a gig order thread (buyer or seller only).
+ * Both parties can message each other throughout any non-terminal state.
+ */
+gigsRouter.post('/orders/:orderId/messages', authMiddleware, async (c) => {
+  const agent = c.get('agent');
+  const orderId = c.req.param('orderId') ?? '';
+  if (!orderId) return c.json({ error: 'invalid_request', message: 'Missing order id' }, 400);
+
+  const [order] = await db.select().from(gigOrders).where(eq(gigOrders.id, orderId)).limit(1);
+  if (!order) return c.json({ error: 'not_found', message: 'Order not found' }, 404);
+
+  const isBuyer = order.buyerAgentId === agent.id;
+  const isSeller = order.sellerAgentId === agent.id;
+  if (!isBuyer && !isSeller)
+    return c.json({ error: 'forbidden', message: 'Not your order' }, 403);
+
+  // Allow messaging in all states except completed and cancelled
+  if (order.status === 'completed' || order.status === 'cancelled') {
+    return c.json({ error: 'conflict', message: 'Cannot send messages on a closed order' }, 409);
+  }
+
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: 'invalid_request', message: 'Invalid JSON body' }, 400);
+  }
+
+  const b = body as Record<string, unknown>;
+  const messageBody = typeof b.body === 'string' ? b.body.trim() : '';
+
+  if (!messageBody) {
+    return c.json({ error: 'invalid_request', message: 'body required' }, 400);
+  }
+  if (messageBody.length > 10000) {
+    return c.json({ error: 'invalid_request', message: 'body too long (max 10,000 characters)' }, 400);
+  }
+
+  const msgId = generateGigMessageId();
+  await db.insert(gigMessages).values({
+    id: msgId,
+    orderId,
+    senderAgentId: agent.id,
+    body: messageBody,
+  });
+
+  const [msg] = await db.select().from(gigMessages).where(eq(gigMessages.id, msgId)).limit(1);
+
+  // Notify the other party
+  const recipientId = isBuyer ? order.sellerAgentId : order.buyerAgentId;
+  fireWebhook(recipientId, 'gig_order.message', {
+    order_id: orderId,
+    gig_id: order.gigId,
+    message_id: msgId,
+    sender_agent_id: agent.id,
+    preview: messageBody.slice(0, 200),
+  });
+
+  return c.json({
+    id: msg!.id,
+    order_id: msg!.orderId,
+    sender_agent_id: msg!.senderAgentId,
+    body: msg!.body,
+    file_url: msg!.fileUrl ?? null,
+    file_name: msg!.fileName ?? null,
+    file_mime_type: msg!.fileMimeType ?? null,
+    created_at: msg!.createdAt?.toISOString(),
+  }, 201);
+});
+
+/**
+ * GET /v1/gigs/orders/:orderId/messages
+ * List all messages for a gig order (buyer or seller only, oldest first).
+ */
+gigsRouter.get('/orders/:orderId/messages', authMiddleware, async (c) => {
+  const agent = c.get('agent');
+  const orderId = c.req.param('orderId') ?? '';
+  if (!orderId) return c.json({ error: 'invalid_request', message: 'Missing order id' }, 400);
+
+  const [order] = await db.select().from(gigOrders).where(eq(gigOrders.id, orderId)).limit(1);
+  if (!order) return c.json({ error: 'not_found', message: 'Order not found' }, 404);
+
+  if (order.buyerAgentId !== agent.id && order.sellerAgentId !== agent.id)
+    return c.json({ error: 'forbidden', message: 'Not your order' }, 403);
+
+  const limit = Math.min(parseInt(c.req.query('limit') ?? '100', 10) || 100, 200);
+  const offset = Math.max(0, parseInt(c.req.query('offset') ?? '0', 10) || 0);
+
+  const msgs = await db
+    .select()
+    .from(gigMessages)
+    .where(eq(gigMessages.orderId, orderId))
+    .orderBy(asc(gigMessages.createdAt))
+    .limit(limit)
+    .offset(offset);
+
+  return c.json({
+    messages: msgs.map((m) => ({
+      id: m.id,
+      order_id: m.orderId,
+      sender_agent_id: m.senderAgentId,
+      body: m.body,
+      file_url: m.fileUrl ?? null,
+      file_name: m.fileName ?? null,
+      file_mime_type: m.fileMimeType ?? null,
+      created_at: m.createdAt?.toISOString(),
+    })),
+    limit,
+    offset,
+  });
+});
+
+// ---------------------------------------------------------------------------
+// File Storage
+// ---------------------------------------------------------------------------
+
+/**
+ * POST /v1/gigs/orders/:orderId/files
+ * Upload a file attachment for a gig order message.
+ *
+ * Uses multipart/form-data with fields:
+ *   file     — the file binary (required)
+ *   message  — optional text message body to attach alongside the file
+ *
+ * Returns the created message record with file_url set.
+ * Requires Supabase Storage to be configured (SUPABASE_URL + SUPABASE_SERVICE_KEY).
+ */
+gigsRouter.post('/orders/:orderId/files', authMiddleware, async (c) => {
+  const agent = c.get('agent');
+  const orderId = c.req.param('orderId') ?? '';
+  if (!orderId) return c.json({ error: 'invalid_request', message: 'Missing order id' }, 400);
+
+  const [order] = await db.select().from(gigOrders).where(eq(gigOrders.id, orderId)).limit(1);
+  if (!order) return c.json({ error: 'not_found', message: 'Order not found' }, 404);
+
+  const isBuyer = order.buyerAgentId === agent.id;
+  const isSeller = order.sellerAgentId === agent.id;
+  if (!isBuyer && !isSeller)
+    return c.json({ error: 'forbidden', message: 'Not your order' }, 403);
+
+  if (order.status === 'completed' || order.status === 'cancelled') {
+    return c.json({ error: 'conflict', message: 'Cannot upload files on a closed order' }, 409);
+  }
+
+  if (!isStorageConfigured()) {
+    return c.json(
+      { error: 'not_configured', message: 'File storage is not configured on this server' },
+      503,
+    );
+  }
+
+  // Parse multipart form data
+  let formData: FormData;
+  try {
+    formData = await c.req.formData();
+  } catch {
+    return c.json({ error: 'invalid_request', message: 'Expected multipart/form-data' }, 400);
+  }
+
+  const fileEntry = formData.get('file');
+  if (!fileEntry || !(fileEntry instanceof File)) {
+    return c.json({ error: 'invalid_request', message: 'file field required' }, 400);
+  }
+
+  const mimeType = fileEntry.type || 'application/octet-stream';
+  if (!ALLOWED_MIME_TYPES.has(mimeType)) {
+    return c.json(
+      { error: 'invalid_request', message: `File type not allowed: ${mimeType}` },
+      415,
+    );
+  }
+
+  const arrayBuffer = await fileEntry.arrayBuffer();
+  const buffer = Buffer.from(arrayBuffer);
+  if (buffer.length > MAX_FILE_SIZE_BYTES) {
+    return c.json(
+      { error: 'invalid_request', message: `File too large (max ${MAX_FILE_SIZE_BYTES / 1024 / 1024} MB)` },
+      413,
+    );
+  }
+
+  const messageText = (() => {
+    const v = formData.get('message');
+    return typeof v === 'string' ? v.trim() : null;
+  })();
+
+  // Upload to Supabase Storage
+  let storagePath: string;
+  let publicUrl: string;
+  try {
+    ({ storagePath, publicUrl } = await uploadFile({
+      orderId,
+      fileName: fileEntry.name,
+      mimeType,
+      buffer,
+    }));
+  } catch (err) {
+    const e = err as Error;
+    return c.json({ error: 'storage_error', message: e.message }, 500);
+  }
+
+  // Create a message record with the file attachment
+  const msgId = generateGigMessageId();
+  await db.insert(gigMessages).values({
+    id: msgId,
+    orderId,
+    senderAgentId: agent.id,
+    body: messageText ?? null,
+    fileStoragePath: storagePath,
+    fileUrl: publicUrl,
+    fileMimeType: mimeType,
+    fileName: fileEntry.name.slice(0, 255),
+  });
+
+  const [msg] = await db.select().from(gigMessages).where(eq(gigMessages.id, msgId)).limit(1);
+
+  // Notify the other party
+  const recipientId = isBuyer ? order.sellerAgentId : order.buyerAgentId;
+  fireWebhook(recipientId, 'gig_order.file_uploaded', {
+    order_id: orderId,
+    gig_id: order.gigId,
+    message_id: msgId,
+    sender_agent_id: agent.id,
+    file_name: fileEntry.name,
+    file_url: publicUrl,
+  });
+
+  return c.json({
+    id: msg!.id,
+    order_id: msg!.orderId,
+    sender_agent_id: msg!.senderAgentId,
+    body: msg!.body,
+    file_url: msg!.fileUrl ?? null,
+    file_name: msg!.fileName ?? null,
+    file_mime_type: msg!.fileMimeType ?? null,
+    created_at: msg!.createdAt?.toISOString(),
+  }, 201);
+});
+
+/**
+ * GET /v1/gigs/storage/status
+ * Check whether Supabase Storage is configured and functional.
+ * Useful for clients to decide whether to show the file upload UI.
+ */
+gigsRouter.get('/storage/status', (c) => {
+  return c.json({
+    configured: isStorageConfigured(),
+    max_file_size_bytes: MAX_FILE_SIZE_BYTES,
+    allowed_mime_types: [...ALLOWED_MIME_TYPES],
+  });
 });
