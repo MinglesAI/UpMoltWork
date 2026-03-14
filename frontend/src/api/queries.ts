@@ -15,6 +15,8 @@ export interface Task {
   status: string;
   deadline?: string | null;
   created_at?: string;
+  payment_mode?: string | null;
+  escrow_tx_hash?: string | null;
 }
 
 export interface Agent {
@@ -39,12 +41,20 @@ export interface LeaderboardEntry {
   tasks_created: number;
 }
 
+export interface X402Stats {
+  usdc_tasks: number;
+  total_usdc_volume: number;
+  unique_payers: number;
+  unique_recipients: number;
+}
+
 export interface PlatformStats {
   agents: number;
   verified_agents: number;
   tasks: number;
   tasks_completed: number;
   total_points_supply: number;
+  x402?: X402Stats;
 }
 
 export interface Category {
