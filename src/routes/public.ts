@@ -40,19 +40,33 @@ publicRouter.get('/feed', async (c) => {
         .where(and(eq(submissions.status, 'approved'), inArray(submissions.taskId, taskIds)))
     : [];
 
+  // Fetch escrow network per task from x402_payments
+  const payments = taskIds.length
+    ? await db
+        .select({ taskId: x402Payments.taskId, network: x402Payments.network })
+        .from(x402Payments)
+        .where(and(eq(x402Payments.paymentType, 'escrow'), inArray(x402Payments.taskId, taskIds)))
+    : [];
+
   const subByTask = new Map(subs.map((s) => [s.taskId, s]));
+  const networkByTask = new Map(payments.map((p) => [p.taskId, p.network]));
+  const envNetwork = process.env.BASE_NETWORK ?? null;
 
   return c.json({
     tasks: completed.map((t) => {
       const s = subByTask.get(t.id);
+      const network = t.paymentMode === 'usdc'
+        ? (networkByTask.get(t.id) ?? envNetwork)
+        : null;
       return {
         id: t.id,
         category: t.category,
         title: t.title,
-        price_points: t.pricePoints,
+        price_points: t.pricePoints ? parseFloat(t.pricePoints) : null,
         price_usdc: t.priceUsdc ? parseFloat(t.priceUsdc) : null,
         payment_mode: t.paymentMode,
         escrow_tx_hash: t.escrowTxHash ?? null,
+        network,
         status: t.status,
         completed_at: t.updatedAt?.toISOString(),
         result_url: s?.resultUrl ?? null,
@@ -212,6 +226,9 @@ publicRouter.get('/stats', async (c) => {
     };
   }
 
+  const sepoliaStats = networks['eip155:84532'];
+  const mainnetStats = networks['eip155:8453'];
+
   return c.json({
     agents: Number((agentsCount as { n: number })?.n ?? 0),
     verified_agents: Number((verifiedCount as { n: number })?.n ?? 0),
@@ -222,6 +239,24 @@ publicRouter.get('/stats', async (c) => {
     tasks_by_status: tasksByStatus,
     avg_price_points: parseFloat(String((avgPricesRaw as { avg_points: string; avg_usdc: string })?.avg_points ?? '0')),
     avg_price_usdc: parseFloat(String((avgPricesRaw as { avg_points: string; avg_usdc: string })?.avg_usdc ?? '0')),
+    // 3-currency breakdown (canonical structure for frontend)
+    currencies: {
+      shells: {
+        total_supply: parseFloat(String((supply as { total: string })?.total ?? '0')),
+        total_spent: parseFloat(String((shellsSpent as { total: string })?.total ?? '0')),
+        avg_task_price: parseFloat(String((avgPricesRaw as { avg_points: string; avg_usdc: string })?.avg_points ?? '0')),
+      },
+      usdc_sepolia: {
+        total_volume: sepoliaStats?.total_usdc_volume ?? 0,
+        task_count: sepoliaStats?.usdc_tasks ?? 0,
+        unique_payers: sepoliaStats?.unique_payers ?? 0,
+      },
+      usdc_mainnet: {
+        total_volume: mainnetStats?.total_usdc_volume ?? 0,
+        task_count: mainnetStats?.usdc_tasks ?? 0,
+        unique_payers: mainnetStats?.unique_payers ?? 0,
+      },
+    },
     x402: {
       networks,
       total: {

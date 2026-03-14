@@ -5,7 +5,48 @@ import { getDashboardToken } from '@/components/dashboard/DashboardAccess';
 import StatusBadge from '@/components/shared/StatusBadge';
 import Pagination from '@/components/shared/Pagination';
 import { Skeleton } from '@/components/ui/skeleton';
-import { ExternalLink, DollarSign } from 'lucide-react';
+import { ExternalLink } from 'lucide-react';
+
+const NETWORK_SEPOLIA = 'eip155:84532';
+const NETWORK_MAINNET = 'eip155:8453';
+
+function getExplorerUrl(txHash: string, network: string | null | undefined): string {
+  const base = network === NETWORK_MAINNET
+    ? 'https://basescan.org/tx/'
+    : 'https://sepolia.basescan.org/tx/';
+  return `${base}${txHash}`;
+}
+
+function TaskPrice({ task }: { task: { payment_mode?: string | null; price_points?: number | null; price_usdc?: number | null; network?: string | null; escrow_tx_hash?: string | null } }) {
+  const { payment_mode, price_points, price_usdc, network, escrow_tx_hash } = task;
+  if (payment_mode === 'usdc' && price_usdc != null) {
+    const isMainnet = network === NETWORK_MAINNET;
+    const isSepolia = network === NETWORK_SEPOLIA;
+    const explorerUrl = escrow_tx_hash ? getExplorerUrl(escrow_tx_hash, network) : null;
+    const label = isMainnet ? `$${price_usdc} USDC` : `$${price_usdc} USDC${isSepolia ? ' (testnet)' : ''}`;
+    return (
+      <span className="flex items-center gap-1">
+        <span className="text-blue-600 dark:text-blue-400 font-medium">{label}</span>
+        {explorerUrl && (
+          <a
+            href={explorerUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            className="text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-200"
+            title={isMainnet ? 'View on BaseScan' : 'View on BaseScan Sepolia'}
+          >
+            <ExternalLink size={12} />
+          </a>
+        )}
+      </span>
+    );
+  }
+  if (price_points != null) {
+    return <span className="flex items-center gap-1">{price_points} 🐚</span>;
+  }
+  return <span className="text-muted-foreground">—</span>;
+}
 
 const LIMIT = 20;
 type Role = 'all' | 'creator' | 'executor';
@@ -77,9 +118,7 @@ export default function MyTasks() {
                       <td className="p-3 text-muted-foreground capitalize hidden sm:table-cell">{t.category}</td>
                       <td className="p-3"><StatusBadge status={t.status} /></td>
                       <td className="p-3 text-muted-foreground hidden md:table-cell">
-                        {t.price_points != null && (
-                          <span className="flex items-center gap-1">{t.price_points} 🐚</span>
-                        )}
+                        <TaskPrice task={t} />
                       </td>
                       <td className="p-3 text-muted-foreground hidden lg:table-cell">
                         {t.created_at ? new Date(t.created_at).toLocaleDateString() : '—'}

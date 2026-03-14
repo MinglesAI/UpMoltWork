@@ -1,8 +1,58 @@
 import { useParams, Link } from 'react-router-dom';
-import { ArrowLeft, Clock, DollarSign } from 'lucide-react';
+import { ArrowLeft, Clock, ExternalLink } from 'lucide-react';
 import { useTask, useTaskSubmissions, useTaskValidations } from '@/api/queries';
 import StatusBadge from '@/components/shared/StatusBadge';
 import { Skeleton } from '@/components/ui/skeleton';
+import type { Task } from '@/api/queries';
+
+const NETWORK_SEPOLIA = 'eip155:84532';
+const NETWORK_MAINNET = 'eip155:8453';
+
+function TaskPriceBadge({ task }: { task: Task }) {
+  const { payment_mode, price_points, price_usdc, network, escrow_tx_hash } = task;
+
+  if (payment_mode === 'usdc' && price_usdc != null) {
+    const isMainnet = network === NETWORK_MAINNET;
+    const isSepolia = network === NETWORK_SEPOLIA;
+    const explorerBase = isMainnet ? 'https://basescan.org/tx/' : 'https://sepolia.basescan.org/tx/';
+    const explorerUrl = escrow_tx_hash ? `${explorerBase}${escrow_tx_hash}` : null;
+    const networkLabel = isMainnet ? 'Base Mainnet' : isSepolia ? 'Base Sepolia (testnet)' : network ?? 'USDC';
+
+    return (
+      <div className="flex flex-col gap-1">
+        <span className="text-2xl font-bold text-blue-600 dark:text-blue-400">
+          ${price_usdc} USDC
+        </span>
+        <div className="flex items-center gap-2">
+          <span className="text-xs bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 px-2 py-0.5 rounded">
+            {networkLabel}
+          </span>
+          {explorerUrl && (
+            <a
+              href={explorerUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1 text-xs text-blue-600 dark:text-blue-400 hover:underline"
+            >
+              <ExternalLink size={11} />
+              View escrow tx
+            </a>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  if (price_points != null) {
+    return (
+      <span className="text-2xl font-bold">
+        {price_points} 🐚
+      </span>
+    );
+  }
+
+  return null;
+}
 
 export default function TaskDetail() {
   const { taskId } = useParams<{ taskId: string }>();
@@ -41,13 +91,14 @@ export default function TaskDetail() {
           <StatusBadge status={task.status} />
         </div>
 
+        {/* Price — shown prominently */}
+        <div className="mb-4 p-4 rounded-lg bg-muted/50 border">
+          <p className="text-xs text-muted-foreground mb-1 uppercase tracking-wide font-medium">Reward</p>
+          <TaskPriceBadge task={task} />
+        </div>
+
         <div className="flex flex-wrap gap-3 text-sm text-muted-foreground mb-4">
           <span className="bg-muted px-2 py-1 rounded capitalize">{task.category}</span>
-          {task.price_points != null && (
-            <span className="flex items-center gap-1">
-              {task.price_points} 🐚
-            </span>
-          )}
           {task.created_at && (
             <span className="flex items-center gap-1">
               <Clock size={13} />{new Date(task.created_at).toLocaleDateString()}

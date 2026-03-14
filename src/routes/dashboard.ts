@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { eq, desc, and, or } from 'drizzle-orm';
+import { eq, desc, and, or, inArray } from 'drizzle-orm';
 import { db } from '../db/pool.js';
 import {
   agents,
@@ -7,6 +7,7 @@ import {
   bids,
   transactions,
   webhookDeliveries,
+  x402Payments,
 } from '../db/schema/index.js';
 import { viewTokenMiddleware } from '../auth.js';
 
@@ -31,6 +32,7 @@ dashboardRouter.get('/:agentId', viewTokenMiddleware as any, async (c) => {
       category: tasks.category,
       status: tasks.status,
       price_points: tasks.pricePoints,
+      price_usdc: tasks.priceUsdc,
       payment_mode: tasks.paymentMode,
       escrow_tx_hash: tasks.escrowTxHash,
       creator_agent_id: tasks.creatorAgentId,
@@ -41,6 +43,17 @@ dashboardRouter.get('/:agentId', viewTokenMiddleware as any, async (c) => {
     .where(or(eq(tasks.creatorAgentId, agentId), eq(tasks.executorAgentId, agentId))!)
     .orderBy(desc(tasks.createdAt))
     .limit(5);
+
+  // Fetch network for USDC tasks from x402_payments
+  const recentTaskIds = recentTasks.filter((t) => t.payment_mode === 'usdc').map((t) => t.id);
+  const recentPayments = recentTaskIds.length
+    ? await db
+        .select({ taskId: x402Payments.taskId, network: x402Payments.network })
+        .from(x402Payments)
+        .where(and(eq(x402Payments.paymentType, 'escrow'), inArray(x402Payments.taskId, recentTaskIds)))
+    : [];
+  const recentNetworkByTask = new Map(recentPayments.map((p) => [p.taskId, p.network]));
+  const envNetwork = process.env.BASE_NETWORK ?? null;
 
   const recentTxs = await db
     .select()
@@ -70,8 +83,12 @@ dashboardRouter.get('/:agentId', viewTokenMiddleware as any, async (c) => {
       category: t.category,
       status: t.status,
       price_points: t.price_points ? parseFloat(t.price_points) : null,
+      price_usdc: t.price_usdc ? parseFloat(t.price_usdc) : null,
       payment_mode: t.payment_mode ?? 'points',
       escrow_tx_hash: t.escrow_tx_hash ?? null,
+      network: t.payment_mode === 'usdc'
+        ? (recentNetworkByTask.get(t.id) ?? envNetwork)
+        : null,
       creator_agent_id: t.creator_agent_id,
       executor_agent_id: t.executor_agent_id,
       created_at: (t.created_at as Date | null)?.toISOString() ?? null,
@@ -125,6 +142,17 @@ dashboardRouter.get('/:agentId/tasks', viewTokenMiddleware as any, async (c) => 
     .limit(limit)
     .offset(offset);
 
+  // Fetch network for USDC tasks
+  const usdcTaskIds = rows.filter((t) => t.paymentMode === 'usdc').map((t) => t.id);
+  const taskPayments = usdcTaskIds.length
+    ? await db
+        .select({ taskId: x402Payments.taskId, network: x402Payments.network })
+        .from(x402Payments)
+        .where(and(eq(x402Payments.paymentType, 'escrow'), inArray(x402Payments.taskId, usdcTaskIds)))
+    : [];
+  const taskNetworkMap = new Map(taskPayments.map((p) => [p.taskId, p.network]));
+  const baseNetwork = process.env.BASE_NETWORK ?? null;
+
   return c.json({
     tasks: rows.map((t) => ({
       id: t.id,
@@ -134,8 +162,12 @@ dashboardRouter.get('/:agentId/tasks', viewTokenMiddleware as any, async (c) => 
       title: t.title,
       description: t.description,
       price_points: t.pricePoints ? parseFloat(t.pricePoints) : null,
+      price_usdc: t.priceUsdc ? parseFloat(t.priceUsdc) : null,
       payment_mode: t.paymentMode ?? 'points',
       escrow_tx_hash: t.escrowTxHash ?? null,
+      network: t.paymentMode === 'usdc'
+        ? (taskNetworkMap.get(t.id) ?? baseNetwork)
+        : null,
       status: t.status,
       deadline: t.deadline?.toISOString() ?? null,
       created_at: t.createdAt?.toISOString(),
