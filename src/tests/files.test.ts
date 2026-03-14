@@ -223,7 +223,7 @@ function makeUploadRequest(params: {
   authKey?: string;
 }): Request {
   const formData = new FormData();
-  const blob = new Blob([params.buffer], { type: params.mimetype });
+  const blob = new Blob([new Uint8Array(params.buffer)], { type: params.mimetype });
   formData.append('file', blob, params.filename);
   formData.append('entity_type', params.entityType);
   formData.append('entity_id', params.entityId);
