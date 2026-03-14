@@ -19,6 +19,7 @@ import { a2aRouter } from './routes/a2a.js';
 import { x402Router } from './routes/x402.js';
 import { initX402 } from './lib/x402.js';
 import { gigsRouter } from './routes/gigs.js';
+import { filesRouter } from './routes/files.js';
 
 const app = new Hono();
 
@@ -151,6 +152,7 @@ app.route('/v1/internal', internalRouter);
 app.route('/a2a', a2aRouter);
 app.route('/v1/x402', x402Router);
 app.route('/v1/gigs', gigsRouter);
+app.route('/v1/files', filesRouter);
 
 // ---------------------------------------------------------------------------
 // Start server

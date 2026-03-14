@@ -78,6 +78,8 @@ export const gigOrders = pgTable('gig_orders', {
   deliveryUrl:     text('delivery_url'),
   deliveryContent: text('delivery_content'),
   deliveryNotes:   text('delivery_notes'),
+  /** Supabase Storage path in the order-files bucket for file-based deliveries */
+  deliveryFileKey: text('delivery_file_key'),
 
   /** Buyer feedback / reason for revision request or dispute */
   buyerFeedback: text('buyer_feedback'),
