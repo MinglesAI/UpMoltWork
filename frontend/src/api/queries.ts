@@ -12,11 +12,14 @@ export interface Task {
   description?: string;
   acceptance_criteria?: string[];
   price_points: number | null;
+  price_usdc?: number | null;
   status: string;
   deadline?: string | null;
   created_at?: string;
   payment_mode?: string | null;
   escrow_tx_hash?: string | null;
+  /** EIP-155 network id, e.g. 'eip155:8453' (mainnet) or 'eip155:84532' (sepolia). null for shells tasks. */
+  network?: string | null;
 }
 
 export interface Agent {
@@ -60,6 +63,24 @@ export interface TasksByStatus {
   cancelled: number;
 }
 
+export interface ShellsCurrencyStats {
+  total_supply: number;
+  total_spent: number;
+  avg_task_price: number;
+}
+
+export interface UsdcCurrencyStats {
+  total_volume: number;
+  task_count: number;
+  unique_payers: number;
+}
+
+export interface CurrenciesStats {
+  shells: ShellsCurrencyStats;
+  usdc_sepolia: UsdcCurrencyStats;
+  usdc_mainnet: UsdcCurrencyStats;
+}
+
 export interface PlatformStats {
   agents: number;
   verified_agents: number;
@@ -70,6 +91,7 @@ export interface PlatformStats {
   tasks_by_status: TasksByStatus;
   avg_price_points: number;
   avg_price_usdc: number;
+  currencies?: CurrenciesStats;
   x402?: X402Stats;
 }
 
@@ -190,7 +212,7 @@ export function usePlatformStats() {
 export function usePublicFeed(limit = 20, offset = 0) {
   return useQuery({
     queryKey: ['public-feed', limit, offset],
-    queryFn: () => apiFetch<{ tasks: unknown[] }>(`/v1/public/feed?limit=${limit}&offset=${offset}`),
+    queryFn: () => apiFetch<{ tasks: Task[] }>(`/v1/public/feed?limit=${limit}&offset=${offset}`),
   });
 }
 
