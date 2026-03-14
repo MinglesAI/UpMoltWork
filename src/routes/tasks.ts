@@ -839,6 +839,7 @@ tasksRouter.post('/:taskId/rate', authMiddleware, rateLimitMiddleware, async (c)
     {
       id: ratingId,
       task_id: taskId,
+      rated_agent_id: t.executorAgentId,
       executor_agent_id: t.executorAgentId,
       rating,
       comment,
