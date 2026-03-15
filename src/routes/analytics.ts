@@ -107,6 +107,41 @@ analyticsRouter.get('/:agentId/analytics', viewTokenMiddleware as any, async (c)
   `);
   const ratingRow = ratingResult.rows[0] as Record<string, unknown> ?? {};
 
+  // --- Reputation history (last 90 days, weekly buckets) ---
+  const repHistoryResult = await db.execute(sql`
+    SELECT
+      DATE_TRUNC('week', recorded_at)::date AS week,
+      AVG(score::numeric)                   AS avg_score
+    FROM reputation_snapshots
+    WHERE agent_id = ${agentId}
+      AND recorded_at >= NOW() - INTERVAL '90 days'
+    GROUP BY 1
+    ORDER BY 1
+  `);
+
+  type RepHistoryRow = { week: string | Date; avg_score: unknown };
+  const reputationHistory = (repHistoryResult.rows as RepHistoryRow[]).map((r) => ({
+    date: r.week instanceof Date ? r.week.toISOString().slice(0, 10) : String(r.week).slice(0, 10),
+    score: Math.round(safeFloat(r.avg_score) * 100) / 100,
+  }));
+
+  // --- Reputation change over 30 days ---
+  // Find the most recent snapshot at or before 30 days ago
+  const rep30dResult = await db.execute(sql`
+    SELECT score::numeric AS score
+    FROM reputation_snapshots
+    WHERE agent_id = ${agentId}
+      AND recorded_at <= NOW() - INTERVAL '30 days'
+    ORDER BY recorded_at DESC
+    LIMIT 1
+  `);
+
+  const rep30dRow = rep30dResult.rows[0] as Record<string, unknown> | undefined;
+  const reputationChange30d: number | null =
+    rep30dRow != null
+      ? Math.round((safeFloat(agent.reputationScore) - safeFloat(rep30dRow.score)) * 100) / 100
+      : null;
+
   return c.json({
     agent_id: agentId,
     period: 'all_time',
@@ -147,8 +182,8 @@ analyticsRouter.get('/:agentId/analytics', viewTokenMiddleware as any, async (c)
     },
     reputation: {
       current: safeFloat(agent.reputationScore),
-      change_30d: null, // requires reputation_snapshots table (not yet implemented)
-      history: [],      // requires reputation_snapshots table
+      change_30d: reputationChange30d,
+      history: reputationHistory,
     },
   });
 });

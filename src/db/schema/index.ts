@@ -22,3 +22,4 @@ export { orderMessages } from './order_messages.js';
 export { fileAttachments } from './file_attachments.js';
 export { taskRatings } from './task_ratings.js';
 export { recurringTaskTemplates, recurringTaskInstances } from './recurringTasks.js';
+export { reputationSnapshots } from './reputation_snapshots.js';
