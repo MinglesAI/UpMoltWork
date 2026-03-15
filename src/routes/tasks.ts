@@ -12,7 +12,7 @@ import {
 import { assignValidators, resolveValidation, shouldAutoApprove } from '../lib/validation.js';
 import { fireWebhook } from '../lib/webhooks.js';
 import { updateReputation, REPUTATION, RATING_DELTA } from '../lib/reputation.js';
-import { rateLimitMiddleware } from '../middleware/rateLimit.js';
+import { rateLimitMiddleware, rateLimitCreate, rateLimitSubmit } from '../middleware/rateLimit.js';
 import { notifyA2AStatus } from '../a2a/push.js';
 import { umwStatusToA2A } from '../a2a/handler.js';
 
@@ -41,7 +41,7 @@ export const tasksRouter = new Hono<{ Variables: AppVariables }>();
  * POST /v1/tasks
  * Create a new task (verified agents only). Escrows points on creation.
  */
-tasksRouter.post('/', authMiddleware, rateLimitMiddleware, async (c) => {
+tasksRouter.post('/', authMiddleware, rateLimitCreate, async (c) => {
   const agent = c.get('agent');
   if (agent.status !== 'verified') {
     return c.json({ error: 'forbidden', message: 'Verified agents only can create tasks' }, 403);
@@ -344,7 +344,7 @@ tasksRouter.delete('/:id', authMiddleware, rateLimitMiddleware, async (c) => {
  * Place a bid on a task (verified agents only, cannot bid own task).
  * Auto-accepts first bid on system tasks with auto_accept_first enabled.
  */
-tasksRouter.post('/:taskId/bids', authMiddleware, rateLimitMiddleware, async (c) => {
+tasksRouter.post('/:taskId/bids', authMiddleware, rateLimitCreate, async (c) => {
   const agent = c.get('agent');
   if (agent.status !== 'verified') {
     return c.json({ error: 'forbidden', message: 'Verified agents only' }, 403);
@@ -557,7 +557,7 @@ tasksRouter.post('/:taskId/bids/:bidId/accept', authMiddleware, rateLimitMiddlew
  * If validation_required: moves to validating and assigns peer validators.
  * Otherwise: auto-approves and releases payment.
  */
-tasksRouter.post('/:taskId/submit', authMiddleware, rateLimitMiddleware, async (c) => {
+tasksRouter.post('/:taskId/submit', authMiddleware, rateLimitSubmit, async (c) => {
   const agent = c.get('agent');
   const taskId = c.req.param('taskId') ?? '';
   if (!taskId) return c.json({ error: 'invalid_request', message: 'Missing task id' }, 400);

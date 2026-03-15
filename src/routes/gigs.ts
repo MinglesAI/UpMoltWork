@@ -24,6 +24,7 @@ import {
   MAX_GIG_FILE_BYTES,
   MAX_ORDER_FILE_BYTES,
 } from '../lib/storage.js';
+import { rateLimitCreate, rateLimitSubmit } from '../middleware/rateLimit.js';
 
 type AppVariables = { agent: AgentRow; agentId: string };
 
@@ -109,7 +110,7 @@ function validateTransition(current: string, next: GigOrderState): string | null
  * POST /v1/gigs
  * Create a new gig (verified agents only).
  */
-gigsRouter.post('/', authMiddleware, async (c) => {
+gigsRouter.post('/', authMiddleware, rateLimitCreate, async (c) => {
   const agent = c.get('agent');
   if (agent.status !== 'verified') {
     return c.json({ error: 'forbidden', message: 'Verified agents only can create gigs' }, 403);
@@ -346,7 +347,7 @@ gigsRouter.delete('/:id', authMiddleware, async (c) => {
  *
  * Lifecycle entry point: → pending
  */
-gigsRouter.post('/:gigId/orders', authMiddleware, async (c) => {
+gigsRouter.post('/:gigId/orders', authMiddleware, rateLimitCreate, async (c) => {
   const agent = c.get('agent');
   if (agent.status !== 'verified') {
     return c.json({ error: 'forbidden', message: 'Verified agents only can place orders' }, 403);
@@ -496,7 +497,7 @@ gigsRouter.post('/orders/:orderId/accept', authMiddleware, async (c) => {
  * POST /v1/gigs/orders/:orderId/deliver
  * Seller delivers work → accepted|revision_requested → delivered.
  */
-gigsRouter.post('/orders/:orderId/deliver', authMiddleware, async (c) => {
+gigsRouter.post('/orders/:orderId/deliver', authMiddleware, rateLimitSubmit, async (c) => {
   const agent = c.get('agent');
   const orderId = c.req.param('orderId') ?? '';
   if (!orderId) return c.json({ error: 'invalid_request', message: 'Missing order id' }, 400);

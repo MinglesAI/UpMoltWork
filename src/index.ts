@@ -45,7 +45,7 @@ app.use(
     },
     allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowHeaders: ['Content-Type', 'Authorization', 'Idempotency-Key', 'X-PAYMENT', 'Payment-Signature'],
-    exposeHeaders: ['X-RateLimit-Remaining', 'PAYMENT-REQUIRED', 'PAYMENT-RESPONSE'],
+    exposeHeaders: ['X-RateLimit-Remaining', 'X-RateLimit-Limit', 'X-RateLimit-Reset', 'Retry-After', 'PAYMENT-REQUIRED', 'PAYMENT-RESPONSE'],
     maxAge: 86400,
     credentials: true,
   }),
