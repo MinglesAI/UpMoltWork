@@ -24,6 +24,12 @@ export interface RateLimitConfig {
   windowMs?: number;
   /** How to identify the caller. 'agent' = agentId (default), 'ip' = client IP. */
   keyBy?: 'agent' | 'ip';
+  /**
+   * Namespace for the store key. Must be unique per limiter to prevent
+   * cross-limiter counter pollution. Defaults to the limit value as a string
+   * (not recommended for production — always provide an explicit name).
+   */
+  name?: string;
 }
 
 type RateLimitMiddleware = (c: Context, next: Next) => Promise<Response | void>;
@@ -74,7 +80,8 @@ async function initRedis(): Promise<void> {
   if (!redisUrl) return;
   try {
     // Dynamic import — only available if ioredis is installed
-    const { default: Redis } = await import('ioredis' as string);
+    // @ts-ignore — dynamic import of optional peer dependency
+    const { default: Redis } = await import('ioredis');
     redisClient = new (Redis as unknown as new (url: string) => RedisClient)(redisUrl);
     console.log('[rateLimit] Redis store active');
   } catch {
@@ -181,28 +188,36 @@ function memoryCheck(
  *
  * Returns a Hono middleware that enforces a sliding-window rate limit.
  *
+ * The `name` field MUST be unique per logical rate-limit group. Without it,
+ * all limiters keyed by agentId share the same store entry, causing cross-
+ * limiter counter pollution (e.g. exhausting the general limiter would also
+ * block the transfer limiter for the same agent).
+ *
  * @example
  * // 20 requests per minute, keyed by agentId
- * const rateLimitCreate = createRateLimiter({ limit: 20 });
+ * const rateLimitCreate = createRateLimiter({ limit: 20, name: 'create' });
  *
  * // 5 requests per minute, keyed by client IP
- * const rateLimitVerification = createRateLimiter({ limit: 5, keyBy: 'ip' });
+ * const rateLimitVerification = createRateLimiter({ limit: 5, keyBy: 'ip', name: 'verification' });
  */
 export function createRateLimiter(config: RateLimitConfig): RateLimitMiddleware {
-  const { limit, windowMs = WINDOW_MS, keyBy = 'agent' } = config;
+  const { limit, windowMs = WINDOW_MS, keyBy = 'agent', name } = config;
+  // Namespace ensures separate counters per limiter. Falling back to the
+  // limit value is intentionally discouraged — always pass an explicit name.
+  const namespace = name ?? String(limit);
 
   return async (c: Context, next: Next): Promise<Response | void> => {
     let storeKey: string;
 
     if (keyBy === 'ip') {
-      storeKey = `rl:ip:${getClientIp(c)}`;
+      storeKey = `rl:${namespace}:ip:${getClientIp(c)}`;
     } else {
       const agentId = c.get('agentId') as string | undefined;
       if (!agentId) {
         // Not authenticated — skip rate limiting (auth middleware handles 401)
         return next();
       }
-      storeKey = `rl:agent:${agentId}`;
+      storeKey = `rl:${namespace}:agent:${agentId}`;
     }
 
     let result: { allowed: boolean; remaining: number; resetAt: number; retryAfter: number };
@@ -236,27 +251,27 @@ export function createRateLimiter(config: RateLimitConfig): RateLimitMiddleware 
 /**
  * 20 req/min (by agent) — task creation, gig creation, bid placement.
  */
-export const rateLimitCreate = createRateLimiter({ limit: 20 });
+export const rateLimitCreate = createRateLimiter({ limit: 20, name: 'create' });
 
 /**
  * 10 req/min (by agent) — submission of results.
  */
-export const rateLimitSubmit = createRateLimiter({ limit: 10 });
+export const rateLimitSubmit = createRateLimiter({ limit: 10, name: 'submit' });
 
 /**
  * 5 req/min (by agent) — P2P point transfers.
  */
-export const rateLimitTransfer = createRateLimiter({ limit: 5 });
+export const rateLimitTransfer = createRateLimiter({ limit: 5, name: 'transfer' });
 
 /**
  * 60 req/min (by agent) — general authenticated endpoints.
  */
-export const rateLimitGeneral = createRateLimiter({ limit: 60 });
+export const rateLimitGeneral = createRateLimiter({ limit: 60, name: 'general' });
 
 /**
  * 5 req/min (by IP) — registration and verification endpoints.
  */
-export const rateLimitVerification = createRateLimiter({ limit: 5, keyBy: 'ip' });
+export const rateLimitVerification = createRateLimiter({ limit: 5, keyBy: 'ip', name: 'verification' });
 
 /**
  * Default backward-compatible export.

@@ -326,6 +326,63 @@ await test('rateLimitGeneral has limit of 60', async () => {
   assert(response.status === 429, `rateLimitGeneral: expected 429 on 61st request, got ${response.status}`);
 });
 
+// --- Cross-limiter isolation ---
+
+console.log('\nCross-limiter isolation:');
+
+await test('different limiters for the same agent use independent counters', async () => {
+  // Use fresh agent IDs to avoid interference from earlier tests
+  const agentId = 'agent-cross-limiter-001';
+
+  const transferLimiter = createRateLimiter({ limit: 5, name: 'xfer-test' });
+  const generalLimiter  = createRateLimiter({ limit: 60, name: 'gen-test' });
+
+  // Exhaust the general limiter for this agent (60 requests)
+  for (let i = 0; i < 60; i++) {
+    const { ctx } = makeMockContext(agentId);
+    await generalLimiter(ctx, next);
+  }
+
+  // General limiter is now exhausted
+  const { ctx: genCtx, response: genResp } = makeMockContext(agentId);
+  await generalLimiter(genCtx, next);
+  assert(genResp.status === 429, `Expected general limiter to be exhausted (429), got ${genResp.status}`);
+
+  // Transfer limiter must NOT be affected — agent has made 0 transfers
+  const { ctx: xferCtx, response: xferResp } = makeMockContext(agentId);
+  await transferLimiter(xferCtx, next);
+  assert(
+    xferResp.status === 200,
+    `Transfer limiter was polluted by general limiter — expected 200 but got ${xferResp.status}. ` +
+    'Ensure store keys are namespaced per limiter (e.g. rl:<name>:agent:<id>).',
+  );
+});
+
+await test('exhausting transfer limiter does not block create limiter', async () => {
+  const agentId = 'agent-cross-limiter-002';
+
+  const transferLimiter = createRateLimiter({ limit: 5,  name: 'xfer-test2' });
+  const createLimiter   = createRateLimiter({ limit: 20, name: 'create-test2' });
+
+  // Exhaust transfers
+  for (let i = 0; i < 5; i++) {
+    const { ctx } = makeMockContext(agentId);
+    await transferLimiter(ctx, next);
+  }
+  const { ctx: xferCtx, response: xferResp } = makeMockContext(agentId);
+  await transferLimiter(xferCtx, next);
+  assert(xferResp.status === 429, 'Transfer limiter should be exhausted');
+
+  // Create limiter must still be open (agent has made 0 create requests)
+  const { ctx: createCtx, response: createResp } = makeMockContext(agentId);
+  await createLimiter(createCtx, next);
+  assert(
+    createResp.status === 200,
+    `Create limiter was polluted by transfer limiter — expected 200 but got ${createResp.status}. ` +
+    'Ensure store keys are namespaced per limiter (e.g. rl:<name>:agent:<id>).',
+  );
+});
+
 // ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------
