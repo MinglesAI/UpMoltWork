@@ -143,6 +143,12 @@ test('approve=true reason includes reputation, tasks_completed, price fields', (
   assert(result.reason.includes('price'), `Reason should mention price: ${result.reason}`);
 });
 
+test('reputationScore=null → NO (null treated as 0)', () => {
+  const executor = { reputationScore: null, tasksCompleted: 23 } as AnyRow;
+  const result = shouldAutoApprove(executor, makePointsTask(80));
+  assert(result.approve === false, `Expected approve=false for null reputation, got ${result.approve} (${result.reason})`);
+});
+
 // ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------

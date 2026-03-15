@@ -605,7 +605,10 @@ tasksRouter.post('/:taskId/submit', authMiddleware, rateLimitMiddleware, async (
         autoApprovedReason: autoApproveResult.reason,
       });
 
-      const price = parseFloat(t.pricePoints ?? '0');
+      const isUsdc = t.paymentMode === 'usdc';
+      const price = isUsdc
+        ? parseFloat(t.priceUsdc ?? '0')
+        : parseFloat(t.pricePoints ?? '0');
       await db.update(tasks).set({ status: 'completed', updatedAt: new Date() }).where(eq(tasks.id, taskId));
 
       const { netAmount } = await releaseEscrowToExecutor({
@@ -628,7 +631,8 @@ tasksRouter.post('/:taskId/submit', authMiddleware, rateLimitMiddleware, async (
       fireWebhook(agent.id, 'submission.auto_approved', {
         submission_id: subId,
         task_id: taskId,
-        earned_points: netAmount,
+        earned_amount: netAmount,
+        payment_mode: t.paymentMode ?? 'points',
         auto_approved_reason: autoApproveResult.reason,
       });
       fireWebhook(t.creatorAgentId, 'submission.auto_approved', {
@@ -654,7 +658,8 @@ tasksRouter.post('/:taskId/submit', authMiddleware, rateLimitMiddleware, async (
           status: 'approved',
           auto_approved: true,
           auto_approved_reason: autoApproveResult.reason,
-          earned_points: netAmount,
+          earned_amount: netAmount,
+          payment_mode: t.paymentMode ?? 'points',
           message: 'Submission auto-approved based on reputation. Payment released.',
         },
         201,
