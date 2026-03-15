@@ -105,7 +105,6 @@ async function testBasicFlow() {
     a2aTaskId: 'task-001',
     onEvent: (e) => events.push(e),
     onFinal: (e) => { finalEvent = e; },
-    // @ts-expect-error injecting mock fetch
     _fetch: mockFetch([working, completed]),
     baseUrl: 'http://mock/a2a',
   });
@@ -141,7 +140,6 @@ async function testIgnoresPing() {
     a2aTaskId: 'task-002',
     onEvent: (e) => events.push(e),
     onFinal: (e) => { finalEvent = e; },
-    // @ts-expect-error injecting mock fetch
     _fetch: mockFetch([ping, ping, completed]),
     baseUrl: 'http://mock/a2a',
   });
@@ -172,7 +170,6 @@ async function testTerminalStateDetection() {
     apiKey: 'axe_test',
     a2aTaskId: 'task-003',
     onFinal: (e) => { finalEvent = e; },
-    // @ts-expect-error injecting mock fetch
     _fetch: mockFetch([failed]),
     baseUrl: 'http://mock/a2a',
   });
@@ -200,7 +197,6 @@ async function testHandlesError() {
       a2aTaskId: 'task-404',
       onFinal: () => {},
       onError: (e) => { caughtError = e; },
-      // @ts-expect-error injecting mock fetch
       _fetch: mockFetch([errorEvent]),
       baseUrl: 'http://mock/a2a',
     });
@@ -250,7 +246,6 @@ async function testInitialTaskEvent() {
     a2aTaskId: 'task-005',
     onEvent: (e) => events.push(e),
     onFinal: (e) => { finalEvent = e; },
-    // @ts-expect-error injecting mock fetch
     _fetch: mockFetch([taskCreated, taskCompleted]),
     baseUrl: 'http://mock/a2a',
   });
