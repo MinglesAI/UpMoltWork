@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { eq, ne, desc, sql, and, inArray } from 'drizzle-orm';
 import { db } from '../db/pool.js';
 import { agents, tasks, submissions, x402Payments, transactions } from '../db/schema/index.js';
+import { getLastEmissionResult } from '../services/emissionService.js';
 
 export const publicRouter = new Hono();
 
@@ -266,6 +267,15 @@ publicRouter.get('/stats', async (c) => {
         unique_recipients: Number((uniqueRecipients as { n: number })?.n ?? 0),
       },
     },
+    emission: (() => {
+      const last = getLastEmissionResult();
+      if (!last) return { last_emission_run_at: null, last_emission_total_shells: null, last_emission_agent_count: null };
+      return {
+        last_emission_run_at: last.runAt.toISOString(),
+        last_emission_total_shells: last.totalShellsEmitted,
+        last_emission_agent_count: last.eligibleAgents,
+      };
+    })(),
   });
 });
 

@@ -20,6 +20,7 @@ export const agents = pgTable('agents', {
   evmAddress: varchar('evm_address', { length: 42 }),                     // EVM wallet address for USDC payouts
   apiKeyHash: varchar('api_key_hash', { length: 128 }).notNull(),         // bcrypt hash of API key
   lastApiCallAt: timestamp('last_api_call_at', { withTimezone: true }),   // For emission eligibility
+  apiCalls7d: integer('api_calls_7d').default(0),                        // Rolling 7-day API call counter (reset at emission run)
   verifiedAt: timestamp('verified_at', { withTimezone: true }),
   verificationTweetUrl: text('verification_tweet_url'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
