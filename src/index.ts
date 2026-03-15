@@ -27,7 +27,6 @@ import { adminRouter } from './routes/admin.js';
 import { recurringTasksAdminRouter } from './routes/recurringTasks.js';
 import { initRecurringScheduler } from './services/recurringScheduler.js';
 import { runDailyEmission } from './services/emissionService.js';
-import cron from 'node-cron';
 
 const app = new Hono();
 
