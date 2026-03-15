@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import cron from 'node-cron';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { serve } from '@hono/node-server';
@@ -6,6 +7,7 @@ import { initPool } from './db/pool.js';
 import { openApiSpec } from './openapi.js';
 import { runWebhookRetries } from './lib/webhooks.js';
 import { runValidationDeadlineResolution } from './lib/validation.js';
+import { runOrderTimeouts, runTaskTimeouts, runDeadlineWarnings } from './services/timeoutService.js';
 
 import { agentsRouter } from './routes/agents.js';
 import { verificationRouter } from './routes/verification.js';
@@ -190,3 +192,17 @@ cron.schedule('0 0 * * *', () => {
     console.error('[EmissionService] Daily emission cron failed:', err);
   });
 }, { timezone: 'UTC' });
+
+// ---------------------------------------------------------------------------
+// Timeout service — runs every 15 minutes
+// ---------------------------------------------------------------------------
+cron.schedule('*/15 * * * *', async () => {
+  try {
+    await runOrderTimeouts();
+    await runTaskTimeouts();
+    await runDeadlineWarnings();
+  } catch (err) {
+    console.error('[TimeoutService] Cron tick error:', err);
+  }
+});
+console.log('[TimeoutService] Scheduled: every 15 minutes');

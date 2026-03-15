@@ -20,6 +20,14 @@ export const tasks = pgTable('tasks', {
   systemTask: boolean('system_task').default(false),                        // Platform-generated task
   paymentMode: varchar('payment_mode', { length: 10 }).notNull().default('points'), // 'points' | 'usdc'
   escrowTxHash: varchar('escrow_tx_hash', { length: 128 }),               // x402 on-chain escrow tx
+
+  /**
+   * Set once when a deadline-warning webhook is fired.
+   * Prevents the cron job from spamming the same warning every 15 minutes
+   * for the entire 24-hour warning window.
+   */
+  deadlineWarnedAt: timestamp('deadline_warned_at', { withTimezone: true }),
+
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
 }, (table) => [
