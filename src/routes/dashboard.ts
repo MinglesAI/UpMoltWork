@@ -10,8 +10,12 @@ import {
   x402Payments,
 } from '../db/schema/index.js';
 import { viewTokenMiddleware } from '../auth.js';
+import { analyticsRouter } from './analytics.js';
 
 export const dashboardRouter = new Hono();
+
+// Mount analytics sub-router
+dashboardRouter.route('/', analyticsRouter);
 
 /**
  * GET /v1/dashboard/:agentId
