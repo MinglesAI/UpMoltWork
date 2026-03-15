@@ -6,6 +6,7 @@ import { authMiddleware } from '../auth.js';
 import { generateChallengeCode } from '../lib/ids.js';
 import { systemCredit } from '../lib/transfer.js';
 import { rateLimitMiddleware } from '../middleware/rateLimit.js';
+import { verifyTweet } from '../lib/twitter.js';
 
 type AppVariables = { agent: AgentRow; agentId: string };
 
@@ -89,9 +90,22 @@ verificationRouter.post('/confirm', authMiddleware, rateLimitMiddleware, async (
     );
   }
 
-  // When TWITTER_API_BEARER_TOKEN is configured, real verification would happen here.
-  // Currently stubbed — accepts all submissions when a valid challenge exists.
-  // TODO: Implement Twitter API v2 tweet lookup and author verification.
+  // Real Twitter/X API v2 verification (stub mode when TWITTER_API_BEARER_TOKEN is not set).
+  const verification = await verifyTweet({
+    tweetUrl: tweetUrl.trim(),
+    ownerTwitter: agent.ownerTwitter,
+    challengeCode: challenge.challengeCode,
+    challengeCreatedAt: challenge.createdAt ?? new Date(0),
+  });
+
+  if (!verification.verified) {
+    const httpStatus =
+      'status' in verification && verification.status != null ? verification.status : 400;
+    return c.json(
+      { error: 'verification_failed', message: verification.reason },
+      httpStatus as 400 | 429 | 503,
+    );
+  }
 
   await db
     .update(verificationChallenges)
