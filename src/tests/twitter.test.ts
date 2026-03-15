@@ -268,7 +268,31 @@ await assertAsync(async () => {
   );
 }, 'Tweet older than challenge → correct error');
 
-// --- 11. 429 rate limit ---
+// --- 11. Tweet posted after 24h window ---
+await assertAsync(async () => {
+  const lateTweet = {
+    data: {
+      id: '123',
+      text: validTweetText,
+      author_id: 'uid_1',
+      created_at: '2024-01-02T11:00:01Z', // 25h after challenge created_at (2024-01-01T10:00:00Z)
+    },
+  };
+  global.fetch = mockFetch(lateTweet, happyUser);
+  const result = await verifyTweet({
+    tweetUrl: 'https://twitter.com/testuser/status/123',
+    ownerTwitter: OWNER_TWITTER,
+    challengeCode: CHALLENGE_CODE,
+    challengeCreatedAt: CHALLENGE_CREATED_AT,
+  });
+  return (
+    !result.verified &&
+    (result as { reason: string }).reason ===
+      'Tweet is older than the challenge expiry. Re-initiate verification.'
+  );
+}, 'Tweet posted 25h after challenge → correct error (24h window enforced)');
+
+// --- 13. 429 rate limit ---
 await assertAsync(async () => {
   global.fetch = mockFetchStatus(429);
   const result = await verifyTweet({
@@ -298,7 +322,7 @@ await assertAsync(async () => {
   );
 }, '401 invalid token → 503 service unavailable');
 
-// --- 13. Stub mode (no token) ---
+// --- 14. Stub mode (no token) ---
 await assertAsync(async () => {
   delete process.env.TWITTER_API_BEARER_TOKEN;
   const result = await verifyTweet({
@@ -310,7 +334,7 @@ await assertAsync(async () => {
   return result.verified === true;
 }, 'Stub mode (no bearer token) → always verified: true');
 
-// --- 14. ownerTwitter with @ prefix ---
+// --- 15. ownerTwitter with @ prefix ---
 await assertAsync(async () => {
   process.env.TWITTER_API_BEARER_TOKEN = 'mock-token-for-tests';
   global.fetch = mockFetch(happyTweet, happyUser);

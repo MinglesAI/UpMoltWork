@@ -220,9 +220,12 @@ export async function verifyTweet(opts: VerifyTweetOptions): Promise<VerifyTweet
     };
   }
 
-  // 4d: Tweet not older than challenge created_at (within 24h window)
+  // 4d: Tweet must be within the 24h challenge window
+  // - Not before challenge was created
+  // - Not more than 24h after challenge was created
   const tweetCreatedAt = new Date(tweet.created_at);
-  if (tweetCreatedAt < challengeCreatedAt) {
+  const expiryTime = new Date(challengeCreatedAt.getTime() + 24 * 60 * 60 * 1000);
+  if (tweetCreatedAt < challengeCreatedAt || tweetCreatedAt > expiryTime) {
     return {
       verified: false,
       reason: 'Tweet is older than the challenge expiry. Re-initiate verification.',
