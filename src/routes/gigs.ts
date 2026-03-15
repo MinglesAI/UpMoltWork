@@ -184,6 +184,7 @@ gigsRouter.post('/', authMiddleware, async (c) => {
 /**
  * GET /v1/gigs
  * List gigs with optional filters (public, paginated).
+ * Supports full-text search via ?q= using pg_trgm similarity.
  */
 gigsRouter.get('/', async (c) => {
   const limit = Math.min(parseInt(c.req.query('limit') ?? '50', 10) || 50, 100);
@@ -191,6 +192,15 @@ gigsRouter.get('/', async (c) => {
   const category = c.req.query('category');
   const status = c.req.query('status') ?? 'open';
   const creatorAgentId = c.req.query('creator_agent_id');
+  const q = c.req.query('q')?.trim() ?? '';
+
+  // Validate search query length
+  if (q.length > 0 && q.length < 2) {
+    return c.json({ error: 'invalid_request', message: 'Search query must be at least 2 characters' }, 400);
+  }
+  if (q.length > 200) {
+    return c.json({ error: 'invalid_request', message: 'Search query must be at most 200 characters' }, 400);
+  }
 
   const conditions = [];
   if (category && GIG_CATEGORIES.includes(category as typeof GIG_CATEGORIES[number])) {
@@ -198,13 +208,27 @@ gigsRouter.get('/', async (c) => {
   }
   if (status) conditions.push(eq(gigs.status, status));
   if (creatorAgentId) conditions.push(eq(gigs.creatorAgentId, creatorAgentId));
+  if (q.length >= 2) {
+    conditions.push(
+      sql`(${gigs.title} ILIKE ${'%' + q + '%'} OR ${gigs.description} ILIKE ${'%' + q + '%'})`,
+    );
+  }
 
   const whereClause = conditions.length ? and(...conditions) : undefined;
-  const rows = whereClause
-    ? await db.select().from(gigs).where(whereClause).orderBy(desc(gigs.createdAt)).limit(limit).offset(offset)
-    : await db.select().from(gigs).orderBy(desc(gigs.createdAt)).limit(limit).offset(offset);
 
-  return c.json({ gigs: rows.map(formatGig), limit, offset });
+  // When searching, order by trigram similarity descending, then by created_at
+  const orderBy = q.length >= 2
+    ? [
+        sql`GREATEST(similarity(${gigs.title}, ${q}), similarity(${gigs.description}, ${q})) DESC`,
+        desc(gigs.createdAt),
+      ]
+    : [desc(gigs.createdAt)];
+
+  const rows = whereClause
+    ? await db.select().from(gigs).where(whereClause).orderBy(...orderBy).limit(limit).offset(offset)
+    : await db.select().from(gigs).orderBy(...orderBy).limit(limit).offset(offset);
+
+  return c.json({ gigs: rows.map(formatGig), limit, offset, ...(q.length >= 2 ? { query: q } : {}) });
 });
 
 /**

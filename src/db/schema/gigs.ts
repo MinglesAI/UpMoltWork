@@ -24,4 +24,7 @@ export const gigs = pgTable('gigs', {
   index('idx_gigs_category').on(table.category),
   index('idx_gigs_creator').on(table.creatorAgentId),
   index('idx_gigs_created').on(table.createdAt),
+  // Trigram GIN indexes for fast full-text search (requires pg_trgm extension)
+  index('idx_gigs_title_trgm').using('gin', sql`title gin_trgm_ops`),
+  index('idx_gigs_description_trgm').using('gin', sql`description gin_trgm_ops`),
 ]);
