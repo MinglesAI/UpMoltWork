@@ -455,6 +455,14 @@ async function _warnGigOrders(): Promise<void> {
   const warningMs = TIMEOUTS.warningHours() * 3600_000;
   const now = Date.now();
 
+  // Helper: stamp the order and suppress further warnings
+  async function stampWarned(orderId: string): Promise<void> {
+    await db
+      .update(gigOrders)
+      .set({ deadlineWarnedAt: new Date() })
+      .where(and(eq(gigOrders.id, orderId), isNull(gigOrders.deadlineWarnedAt)));
+  }
+
   // --- pending orders ---
   const pendingHours = TIMEOUTS.gigPendingHours();
   const pendingRows = await db
@@ -463,9 +471,10 @@ async function _warnGigOrders(): Promise<void> {
       buyerAgentId: gigOrders.buyerAgentId,
       sellerAgentId: gigOrders.sellerAgentId,
       createdAt: gigOrders.createdAt,
+      deadlineWarnedAt: gigOrders.deadlineWarnedAt,
     })
     .from(gigOrders)
-    .where(eq(gigOrders.status, 'pending'));
+    .where(and(eq(gigOrders.status, 'pending'), isNull(gigOrders.deadlineWarnedAt)));
 
   for (const order of pendingRows) {
     const deadline = new Date((order.createdAt ?? new Date()).getTime() + pendingHours * 3600_000);
@@ -474,6 +483,7 @@ async function _warnGigOrders(): Promise<void> {
       const data = { order_id: order.id, deadline: deadline.toISOString(), reason: 'pending_timeout_warning' };
       fireWebhook(order.buyerAgentId, 'gig_order.deadline_warning', data);
       fireWebhook(order.sellerAgentId, 'gig_order.deadline_warning', data);
+      await stampWarned(order.id);
     }
   }
 
@@ -486,10 +496,17 @@ async function _warnGigOrders(): Promise<void> {
       sellerAgentId: gigOrders.sellerAgentId,
       acceptedAt: gigOrders.acceptedAt,
       deliveryDays: gigs.deliveryDays,
+      deadlineWarnedAt: gigOrders.deadlineWarnedAt,
     })
     .from(gigOrders)
     .innerJoin(gigs, eq(gigs.id, gigOrders.gigId))
-    .where(and(eq(gigOrders.status, 'accepted'), isNotNull(gigOrders.acceptedAt)));
+    .where(
+      and(
+        eq(gigOrders.status, 'accepted'),
+        isNotNull(gigOrders.acceptedAt),
+        isNull(gigOrders.deadlineWarnedAt),
+      ),
+    );
 
   for (const order of acceptedRows) {
     if (!order.acceptedAt) continue;
@@ -500,6 +517,7 @@ async function _warnGigOrders(): Promise<void> {
       const data = { order_id: order.id, deadline: deadline.toISOString(), reason: 'delivery_deadline_warning' };
       fireWebhook(order.buyerAgentId, 'gig_order.deadline_warning', data);
       fireWebhook(order.sellerAgentId, 'gig_order.deadline_warning', data);
+      await stampWarned(order.id);
     }
   }
 
@@ -511,9 +529,16 @@ async function _warnGigOrders(): Promise<void> {
       buyerAgentId: gigOrders.buyerAgentId,
       sellerAgentId: gigOrders.sellerAgentId,
       deliveredAt: gigOrders.deliveredAt,
+      deadlineWarnedAt: gigOrders.deadlineWarnedAt,
     })
     .from(gigOrders)
-    .where(and(eq(gigOrders.status, 'delivered'), isNotNull(gigOrders.deliveredAt)));
+    .where(
+      and(
+        eq(gigOrders.status, 'delivered'),
+        isNotNull(gigOrders.deliveredAt),
+        isNull(gigOrders.deadlineWarnedAt),
+      ),
+    );
 
   for (const order of deliveredRows) {
     if (!order.deliveredAt) continue;
@@ -523,6 +548,7 @@ async function _warnGigOrders(): Promise<void> {
       const data = { order_id: order.id, deadline: deadline.toISOString(), reason: 'auto_complete_warning' };
       fireWebhook(order.buyerAgentId, 'gig_order.deadline_warning', data);
       fireWebhook(order.sellerAgentId, 'gig_order.deadline_warning', data);
+      await stampWarned(order.id);
     }
   }
 
@@ -534,9 +560,15 @@ async function _warnGigOrders(): Promise<void> {
       buyerAgentId: gigOrders.buyerAgentId,
       sellerAgentId: gigOrders.sellerAgentId,
       updatedAt: gigOrders.updatedAt,
+      deadlineWarnedAt: gigOrders.deadlineWarnedAt,
     })
     .from(gigOrders)
-    .where(eq(gigOrders.status, 'revision_requested'));
+    .where(
+      and(
+        eq(gigOrders.status, 'revision_requested'),
+        isNull(gigOrders.deadlineWarnedAt),
+      ),
+    );
 
   for (const order of revisionRows) {
     const deadline = new Date((order.updatedAt ?? new Date()).getTime() + revisionHours * 3600_000);
@@ -545,6 +577,7 @@ async function _warnGigOrders(): Promise<void> {
       const data = { order_id: order.id, deadline: deadline.toISOString(), reason: 'revision_timeout_warning' };
       fireWebhook(order.buyerAgentId, 'gig_order.deadline_warning', data);
       fireWebhook(order.sellerAgentId, 'gig_order.deadline_warning', data);
+      await stampWarned(order.id);
     }
   }
 }
@@ -562,12 +595,14 @@ async function _warnTasks(): Promise<void> {
       executorAgentId: tasks.executorAgentId,
       deadline: tasks.deadline,
       createdAt: tasks.createdAt,
+      deadlineWarnedAt: tasks.deadlineWarnedAt,
     })
     .from(tasks)
     .where(
       and(
         eq(tasks.status, 'in_progress'),
         isNotNull(tasks.executorAgentId),
+        isNull(tasks.deadlineWarnedAt),
       ),
     );
 
@@ -590,6 +625,12 @@ async function _warnTasks(): Promise<void> {
       if (task.executorAgentId) {
         fireWebhook(task.executorAgentId, 'task.deadline_warning', data);
       }
+
+      // Stamp the task so subsequent cron ticks don't re-fire the warning
+      await db
+        .update(tasks)
+        .set({ deadlineWarnedAt: new Date() })
+        .where(and(eq(tasks.id, task.id), isNull(tasks.deadlineWarnedAt)));
     }
   }
 }

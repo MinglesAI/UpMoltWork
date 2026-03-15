@@ -367,12 +367,69 @@ async function testPendingOrderNotExpired(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Test: 8 — runDeadlineWarnings doesn't crash
+// Test: 8 — runDeadlineWarnings fires exactly once per order (de-duplication)
 // ---------------------------------------------------------------------------
 
-async function testWarningsNoCrash(): Promise<void> {
-  // Just verify no unhandled errors
+async function testWarningDeduplication(): Promise<void> {
+  // Create a pending order whose deadline is ~12h away (inside the 24h warning window)
+  // Pending timeout = 48h, so created_at must be ~36h ago (48h - 12h = 36h ago)
+  const gigId = await insertGig();
+  const createdAt = new Date(Date.now() - 36 * 3600_000); // 36h ago → 12h left until 48h timeout
+  const orderId = await insertOrder({ gigId, status: 'pending', createdAt });
+
+  // Also create a task that is in_progress and has ~12h left before deadline+buffer expires.
+  // Deadline: 12h ago, buffer: 24h → effectiveDeadline = now + 12h (inside the 24h window)
+  const taskDeadline = new Date(Date.now() - 12 * 3600_000); // 12h ago
+  const taskId = await insertTask({ status: 'in_progress', executorAgentId: TO_EXEC, deadline: taskDeadline });
+
+  // First run — warnings should fire and deadlineWarnedAt should be stamped
   await runDeadlineWarnings();
+
+  const [order1] = await db
+    .select({ deadlineWarnedAt: gigOrders.deadlineWarnedAt })
+    .from(gigOrders)
+    .where(eq(gigOrders.id, orderId))
+    .limit(1);
+  assert(order1?.deadlineWarnedAt !== null, 'deadlineWarnedAt should be set after first warning');
+  assert(order1?.deadlineWarnedAt instanceof Date, 'deadlineWarnedAt should be a Date');
+
+  const [task1] = await db
+    .select({ deadlineWarnedAt: tasks.deadlineWarnedAt })
+    .from(tasks)
+    .where(eq(tasks.id, taskId))
+    .limit(1);
+  assert(task1?.deadlineWarnedAt !== null, 'task deadlineWarnedAt should be set after first warning');
+
+  const firstOrderWarnedAt = order1!.deadlineWarnedAt!.getTime();
+  const firstTaskWarnedAt  = task1!.deadlineWarnedAt!.getTime();
+
+  // Second run — must NOT update the timestamp (still in the warning window, but already warned)
+  await runDeadlineWarnings();
+
+  const [order2] = await db
+    .select({ deadlineWarnedAt: gigOrders.deadlineWarnedAt })
+    .from(gigOrders)
+    .where(eq(gigOrders.id, orderId))
+    .limit(1);
+  assert(
+    order2?.deadlineWarnedAt?.getTime() === firstOrderWarnedAt,
+    'deadlineWarnedAt must not change on second run — warning should not fire again',
+  );
+
+  const [task2] = await db
+    .select({ deadlineWarnedAt: tasks.deadlineWarnedAt })
+    .from(tasks)
+    .where(eq(tasks.id, taskId))
+    .limit(1);
+  assert(
+    task2?.deadlineWarnedAt?.getTime() === firstTaskWarnedAt,
+    'task deadlineWarnedAt must not change on second run — warning should not fire again',
+  );
+
+  // Cleanup
+  await db.execute(sql`UPDATE gig_orders SET status = 'cancelled' WHERE id = ${orderId}`);
+  await db.execute(sql`UPDATE agents SET balance_points = balance_points + 100 WHERE id = ${TO_BUYER}`);
+  await db.execute(sql`UPDATE agents SET balance_points = balance_points - 100 WHERE id = 'agt_system'`);
 }
 
 // ---------------------------------------------------------------------------
@@ -413,7 +470,7 @@ async function main(): Promise<void> {
   await runTest('5. in_progress task times out after deadline+24h (executor removed)', testTaskExecutorTimeout);
   await runTest('6. task with no deadline times out after 7 days', testTaskNoDeadlineTimeout);
   await runTest('7. non-expired pending order is NOT cancelled', testPendingOrderNotExpired);
-  await runTest('8. runDeadlineWarnings does not crash', testWarningsNoCrash);
+  await runTest('8. runDeadlineWarnings fires exactly once per order (de-duplication)', testWarningDeduplication);
   await runTest('9. TIMEOUTS config reads env vars correctly', testTimeoutsConfig);
 
   console.log('\n🧹 Cleaning up...');
