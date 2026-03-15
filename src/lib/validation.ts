@@ -8,6 +8,64 @@ import { fireWebhook } from './webhooks.js';
 import { updateReputation, REPUTATION } from './reputation.js';
 import { notifyA2AStatus } from '../a2a/push.js';
 import { umwStatusToA2A } from '../a2a/handler.js';
+import type { AgentRow, TaskRow } from '../db/schema/index.js';
+
+// ---------------------------------------------------------------------------
+// Auto-approve configuration (configurable via env vars)
+// ---------------------------------------------------------------------------
+const AUTO_APPROVE_MIN_REPUTATION = parseFloat(process.env.AUTO_APPROVE_MIN_REPUTATION ?? '4.5');
+const AUTO_APPROVE_MIN_TASKS      = parseInt(process.env.AUTO_APPROVE_MIN_TASKS ?? '10', 10);
+const AUTO_APPROVE_MAX_POINTS     = parseFloat(process.env.AUTO_APPROVE_MAX_POINTS ?? '500');
+const AUTO_APPROVE_MAX_USDC       = parseFloat(process.env.AUTO_APPROVE_MAX_USDC ?? '50');
+
+/**
+ * Determine whether a submission should be auto-approved based on executor reputation.
+ *
+ * Auto-approve fires when ALL of the following are true:
+ *   - executor.reputation_score >= AUTO_APPROVE_MIN_REPUTATION (default 4.5)
+ *   - executor.tasks_completed  >= AUTO_APPROVE_MIN_TASKS      (default 10)
+ *   - task.validation_required  === true  (only bypasses when validation was configured)
+ *   - For points tasks: price_points <= AUTO_APPROVE_MAX_POINTS (default 500)
+ *   - For USDC  tasks: price_usdc   <= AUTO_APPROVE_MAX_USDC   (default 50.00)
+ *
+ * Returns { approve: true, reason: string } or { approve: false, reason: string }.
+ */
+export function shouldAutoApprove(
+  executor: AgentRow,
+  task: Pick<TaskRow, 'validationRequired' | 'paymentMode' | 'pricePoints' | 'priceUsdc'>,
+): { approve: boolean; reason: string } {
+  const rep       = parseFloat(executor.reputationScore ?? '0');
+  const completed = executor.tasksCompleted ?? 0;
+  const price     = parseFloat(task.pricePoints ?? '0');
+  const priceUsdc = parseFloat(task.priceUsdc ?? '0');
+
+  if (!task.validationRequired) {
+    return { approve: false, reason: 'validation_not_required' };
+  }
+  if (rep < AUTO_APPROVE_MIN_REPUTATION) {
+    return { approve: false, reason: `reputation ${rep} < ${AUTO_APPROVE_MIN_REPUTATION}` };
+  }
+  if (completed < AUTO_APPROVE_MIN_TASKS) {
+    return { approve: false, reason: `tasks_completed ${completed} < ${AUTO_APPROVE_MIN_TASKS}` };
+  }
+  if (task.paymentMode === 'points' && price > AUTO_APPROVE_MAX_POINTS) {
+    return { approve: false, reason: `price ${price} > ${AUTO_APPROVE_MAX_POINTS} (points limit)` };
+  }
+  if (task.paymentMode === 'usdc' && priceUsdc > AUTO_APPROVE_MAX_USDC) {
+    return { approve: false, reason: `price_usdc ${priceUsdc} > ${AUTO_APPROVE_MAX_USDC} (USDC limit)` };
+  }
+
+  const parts: string[] = [
+    `Executor reputation ${rep} >= ${AUTO_APPROVE_MIN_REPUTATION}`,
+    `tasks_completed ${completed} >= ${AUTO_APPROVE_MIN_TASKS}`,
+  ];
+  if (task.paymentMode === 'points') {
+    parts.push(`price ${price} <= ${AUTO_APPROVE_MAX_POINTS}`);
+  } else {
+    parts.push(`price_usdc ${priceUsdc} <= ${AUTO_APPROVE_MAX_USDC}`);
+  }
+  return { approve: true, reason: parts.join(', ') };
+}
 
 const VALIDATION_DEADLINE_HOURS = 48;
 const VALIDATOR_REWARD = 5;

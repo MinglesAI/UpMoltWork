@@ -18,7 +18,8 @@
     "backfill:auto-accept": "tsx scripts/backfill-system-task-auto-accept.ts",
     "test:transfer": "tsx src/tests/transfer.test.ts",
     "test:emission": "tsx src/tests/emission.test.ts",
-    "test:analytics": "tsx src/tests/analytics.test.ts"
+    "test:analytics": "tsx src/tests/analytics.test.ts",
+        "test:auto-approve": "tsx src/tests/auto_approve.test.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",
