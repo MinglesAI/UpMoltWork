@@ -2,6 +2,8 @@ export { agents } from './agents.js';
 import { agents } from './agents.js';
 export type AgentRow = typeof agents.$inferSelect;
 export { tasks } from './tasks.js';
+import { tasks } from './tasks.js';
+export type TaskRow = typeof tasks.$inferSelect;
 export { bids } from './bids.js';
 export { submissions } from './submissions.js';
 export { validations } from './validations.js';

@@ -9,7 +9,7 @@ import {
   releaseEscrowToExecutor,
   refundEscrow,
 } from '../lib/transfer.js';
-import { assignValidators, resolveValidation } from '../lib/validation.js';
+import { assignValidators, resolveValidation, shouldAutoApprove } from '../lib/validation.js';
 import { fireWebhook } from '../lib/webhooks.js';
 import { updateReputation, REPUTATION, RATING_DELTA } from '../lib/reputation.js';
 import { rateLimitMiddleware } from '../middleware/rateLimit.js';
@@ -585,7 +585,88 @@ tasksRouter.post('/:taskId/submit', authMiddleware, rateLimitMiddleware, async (
   const subId = generateSubmissionId();
   const validationRequired = t.validationRequired === true;
 
+  // ------------------------------------------------------------------
+  // Reputation-based auto-approve: skip peer validation for trusted agents
+  // ------------------------------------------------------------------
   if (validationRequired) {
+    const autoApproveResult = shouldAutoApprove(agent, t);
+
+    if (autoApproveResult.approve) {
+      // Insert as immediately approved with audit fields
+      await db.insert(submissions).values({
+        id: subId,
+        taskId,
+        agentId: agent.id,
+        resultUrl: resultUrl ?? null,
+        resultContent: resultContent ?? null,
+        notes: notes ?? null,
+        status: 'approved',
+        autoApproved: true,
+        autoApprovedReason: autoApproveResult.reason,
+      });
+
+      const isUsdc = t.paymentMode === 'usdc';
+      const price = isUsdc
+        ? parseFloat(t.priceUsdc ?? '0')
+        : parseFloat(t.pricePoints ?? '0');
+      await db.update(tasks).set({ status: 'completed', updatedAt: new Date() }).where(eq(tasks.id, taskId));
+
+      const { netAmount } = await releaseEscrowToExecutor({
+        taskId,
+        executorAgentId: agent.id,
+        totalAmount: price,
+      });
+
+      await db
+        .update(agents)
+        .set({ tasksCompleted: sql`tasks_completed + 1`, updatedAt: sql`NOW()` })
+        .where(eq(agents.id, agent.id));
+      await db
+        .update(agents)
+        .set({ tasksCreated: sql`tasks_created + 1`, updatedAt: sql`NOW()` })
+        .where(eq(agents.id, t.creatorAgentId));
+
+      await updateReputation(agent.id, REPUTATION.TASK_COMPLETED);
+
+      fireWebhook(agent.id, 'submission.auto_approved', {
+        submission_id: subId,
+        task_id: taskId,
+        earned_amount: netAmount,
+        payment_mode: t.paymentMode ?? 'points',
+        auto_approved_reason: autoApproveResult.reason,
+      });
+      fireWebhook(t.creatorAgentId, 'submission.auto_approved', {
+        submission_id: subId,
+        task_id: taskId,
+        auto_approved_reason: autoApproveResult.reason,
+      });
+
+      // A2A notify: task completed via auto-approve (SSE + webhook)
+      const [autoApprA2aCtx] = await db.select().from(a2aTaskContexts).where(eq(a2aTaskContexts.umwTaskId, taskId)).limit(1);
+      if (autoApprA2aCtx) {
+        notifyA2AStatus(autoApprA2aCtx, {
+          taskId: autoApprA2aCtx.a2aTaskId,
+          contextId: autoApprA2aCtx.contextId ?? undefined,
+          status: { state: umwStatusToA2A('completed'), timestamp: new Date().toISOString() },
+          final: true,
+        });
+      }
+
+      return c.json(
+        {
+          submission_id: subId,
+          status: 'approved',
+          auto_approved: true,
+          auto_approved_reason: autoApproveResult.reason,
+          earned_amount: netAmount,
+          payment_mode: t.paymentMode ?? 'points',
+          message: 'Submission auto-approved based on reputation. Payment released.',
+        },
+        201,
+      );
+    }
+
+    // Standard validation path
     await db.insert(submissions).values({
       id: subId,
       taskId,
@@ -594,6 +675,8 @@ tasksRouter.post('/:taskId/submit', authMiddleware, rateLimitMiddleware, async (
       resultContent: resultContent ?? null,
       notes: notes ?? null,
       status: 'validating',
+      autoApproved: false,
+      autoApprovedReason: null,
     });
     await db
       .update(tasks)
@@ -628,6 +711,7 @@ tasksRouter.post('/:taskId/submit', authMiddleware, rateLimitMiddleware, async (
       {
         submission_id: subId,
         status: 'validating',
+        auto_approved: false,
         validators_assigned: assigned.length,
         message: 'Submission submitted for validation (2-of-3).',
       },
@@ -644,6 +728,8 @@ tasksRouter.post('/:taskId/submit', authMiddleware, rateLimitMiddleware, async (
     resultContent: resultContent ?? null,
     notes: notes ?? null,
     status: 'approved',
+    autoApproved: false,
+    autoApprovedReason: null,
   });
 
   const price = parseFloat(t.pricePoints ?? '0');
@@ -691,6 +777,7 @@ tasksRouter.post('/:taskId/submit', authMiddleware, rateLimitMiddleware, async (
     {
       submission_id: subId,
       status: 'approved',
+      auto_approved: false,
       earned_points: netAmount,
       message: 'Submission approved. Payment released.',
     },
@@ -721,6 +808,8 @@ tasksRouter.get('/:taskId/submissions', async (c) => {
       result_content: s.resultContent ? s.resultContent.slice(0, 500) : null,
       notes: s.notes,
       status: s.status,
+      auto_approved: s.autoApproved ?? false,
+      auto_approved_reason: s.autoApprovedReason ?? null,
       submitted_at: s.submittedAt?.toISOString(),
     })),
   });
