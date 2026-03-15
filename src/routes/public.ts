@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { eq, ne, desc, sql, and, inArray } from 'drizzle-orm';
 import { db } from '../db/pool.js';
-import { agents, tasks, submissions, x402Payments, transactions } from '../db/schema/index.js';
+import { agents, tasks, gigs, submissions, x402Payments, transactions } from '../db/schema/index.js';
 import { getLastEmissionResult } from '../services/emissionService.js';
 
 export const publicRouter = new Hono();
@@ -276,6 +276,117 @@ publicRouter.get('/stats', async (c) => {
         last_emission_agent_count: last.eligibleAgents,
       };
     })(),
+  });
+});
+
+/**
+ * GET /v1/public/search?q=<query>&type=tasks|gigs|all
+ * Unified full-text search across tasks and gigs using pg_trgm similarity.
+ * Returns results sorted by relevance.
+ *
+ * Query parameters:
+ *   q    - search query (required, 2–200 chars)
+ *   type - entity type to search: "tasks", "gigs", or "all" (default: "all")
+ *   limit - max results per entity type (default 10, max 50)
+ */
+publicRouter.get('/search', async (c) => {
+  const q = c.req.query('q')?.trim() ?? '';
+  const type = c.req.query('type') ?? 'all';
+  const limit = Math.min(parseInt(c.req.query('limit') ?? '10', 10) || 10, 50);
+
+  if (q.length < 2) {
+    return c.json({ error: 'invalid_request', message: 'Search query must be at least 2 characters' }, 400);
+  }
+  if (q.length > 200) {
+    return c.json({ error: 'invalid_request', message: 'Search query must be at most 200 characters' }, 400);
+  }
+  if (!['tasks', 'gigs', 'all'].includes(type)) {
+    return c.json({ error: 'invalid_request', message: 'type must be one of: tasks, gigs, all' }, 400);
+  }
+
+  const searchTasks = type === 'tasks' || type === 'all';
+  const searchGigs  = type === 'gigs'  || type === 'all';
+
+  const [taskResults, gigResults] = await Promise.all([
+    searchTasks
+      ? db
+          .select({
+            id: tasks.id,
+            title: tasks.title,
+            description: tasks.description,
+            category: tasks.category,
+            status: tasks.status,
+            price_points: tasks.pricePoints,
+            price_usdc: tasks.priceUsdc,
+            payment_mode: tasks.paymentMode,
+            created_at: tasks.createdAt,
+            relevance: sql<number>`GREATEST(similarity(${tasks.title}, ${q}), similarity(${tasks.description}, ${q}))`,
+          })
+          .from(tasks)
+          .where(
+            sql`(${tasks.title} ILIKE ${'%' + q + '%'} OR ${tasks.description} ILIKE ${'%' + q + '%'})`,
+          )
+          .orderBy(
+            sql`GREATEST(similarity(${tasks.title}, ${q}), similarity(${tasks.description}, ${q})) DESC`,
+            desc(tasks.createdAt),
+          )
+          .limit(limit)
+      : Promise.resolve([]),
+    searchGigs
+      ? db
+          .select({
+            id: gigs.id,
+            title: gigs.title,
+            description: gigs.description,
+            category: gigs.category,
+            status: gigs.status,
+            price_points: gigs.pricePoints,
+            price_usdc: gigs.priceUsdc,
+            delivery_days: gigs.deliveryDays,
+            created_at: gigs.createdAt,
+            relevance: sql<number>`GREATEST(similarity(${gigs.title}, ${q}), similarity(${gigs.description}, ${q}))`,
+          })
+          .from(gigs)
+          .where(
+            sql`(${gigs.title} ILIKE ${'%' + q + '%'} OR ${gigs.description} ILIKE ${'%' + q + '%'})`,
+          )
+          .orderBy(
+            sql`GREATEST(similarity(${gigs.title}, ${q}), similarity(${gigs.description}, ${q})) DESC`,
+            desc(gigs.createdAt),
+          )
+          .limit(limit)
+      : Promise.resolve([]),
+  ]);
+
+  return c.json({
+    query: q,
+    type,
+    tasks: taskResults.map((t) => ({
+      id: t.id,
+      title: t.title,
+      description: t.description ? t.description.slice(0, 300) : null,
+      category: t.category,
+      status: t.status,
+      price_points: t.price_points ? parseFloat(t.price_points) : null,
+      price_usdc: t.price_usdc ? parseFloat(t.price_usdc) : null,
+      payment_mode: t.payment_mode ?? 'points',
+      created_at: t.created_at?.toISOString(),
+      relevance: typeof t.relevance === 'number' ? Math.round(t.relevance * 100) / 100 : 0,
+    })),
+    gigs: gigResults.map((g) => ({
+      id: g.id,
+      title: g.title,
+      description: g.description ? g.description.slice(0, 300) : null,
+      category: g.category,
+      status: g.status,
+      price_points: g.price_points ? parseFloat(g.price_points) : null,
+      price_usdc: g.price_usdc ? parseFloat(g.price_usdc) : null,
+      delivery_days: g.delivery_days ?? null,
+      created_at: g.created_at?.toISOString(),
+      relevance: typeof g.relevance === 'number' ? Math.round(g.relevance * 100) / 100 : 0,
+    })),
+    total_tasks: taskResults.length,
+    total_gigs: gigResults.length,
   });
 });
 
