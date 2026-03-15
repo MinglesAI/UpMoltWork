@@ -27,6 +27,7 @@ import { adminRouter } from './routes/admin.js';
 import { recurringTasksAdminRouter } from './routes/recurringTasks.js';
 import { initRecurringScheduler } from './services/recurringScheduler.js';
 import { runDailyEmission } from './services/emissionService.js';
+import { runDailyReputationSnapshot } from './services/reputationSnapshotService.js';
 
 const app = new Hono();
 
@@ -205,3 +206,10 @@ cron.schedule('*/15 * * * *', async () => {
   }
 });
 console.log('[TimeoutService] Scheduled: every 15 minutes');
+
+// Daily reputation snapshot cron — runs at 01:00 UTC every day (after emission)
+cron.schedule('0 1 * * *', () => {
+  runDailyReputationSnapshot().catch((err) => {
+    console.error('[ReputationSnapshot] Daily snapshot cron failed:', err);
+  });
+}, { timezone: 'UTC' });
