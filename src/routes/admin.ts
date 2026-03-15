@@ -7,7 +7,7 @@
 
 import { Hono } from 'hono';
 import { desc, eq, and, sql, count, sum } from 'drizzle-orm';
-import { db } from '../db/pool.js';
+import { db, dbDirect } from '../db/pool.js';
 import {
   agents,
   tasks,
@@ -529,7 +529,7 @@ adminRouter.post('/gig-orders/:orderId/resolve-dispute', async (c) => {
     return c.json({ error: 'invalid_request', message: 'notes is required' }, 400);
   }
 
-  // Fetch order
+  // Fetch order — used for seller/buyer IDs, payment mode, and 404 check.
   const [order] = await db
     .select()
     .from(gigOrders)
@@ -537,99 +537,133 @@ adminRouter.post('/gig-orders/:orderId/resolve-dispute', async (c) => {
     .limit(1);
 
   if (!order) return c.json({ error: 'not_found', message: 'Order not found' }, 404);
-  if (order.status !== 'disputed') {
-    return c.json(
-      { error: 'conflict', message: `Order is not disputed (current status: ${order.status})` },
-      409,
-    );
-  }
 
-  const price = parseFloat(order.pricePoints ?? '0');
+  // Select the correct escrow amount based on payment mode.
+  // An order placed in USDC mode stores the price in priceUsdc; points orders use pricePoints.
+  const price = order.paymentMode === 'usdc'
+    ? parseFloat(order.priceUsdc ?? '0')
+    : parseFloat(order.pricePoints ?? '0');
 
   if (resolution === 'seller_wins') {
-    // Release escrow to seller (95% net, 5% platform fee)
+    // -------------------------------------------------------------------------
+    // seller_wins path
+    //
+    // Strategy: atomically update order status + seller stats inside a DB
+    // transaction, then call the escrow function LAST. This ensures:
+    //   1. The "check + update" is atomic at the DB level → no double-resolution
+    //      race condition (two concurrent admins both reading 'disputed').
+    //   2. No money moves until all DB writes have committed → if a DB write
+    //      fails the transaction rolls back and no funds are transferred.
+    // -------------------------------------------------------------------------
+    const now = new Date();
+
+    const txResult = await dbDirect.transaction(async (tx) => {
+      // Atomic status guard: only succeeds if order is still 'disputed'.
+      const updated = await tx
+        .update(gigOrders)
+        .set({
+          status: 'completed',
+          disputeResolution: notes,
+          completedAt: now,
+          updatedAt: now,
+        })
+        .where(and(eq(gigOrders.id, orderId), eq(gigOrders.status, 'disputed')))
+        .returning({ id: gigOrders.id, completedAt: gigOrders.completedAt });
+
+      if (updated.length === 0) return null;
+
+      // Update seller stats inside the same transaction.
+      await tx
+        .update(agents)
+        .set({ tasksCompleted: sql`tasks_completed + 1`, updatedAt: sql`NOW()` })
+        .where(eq(agents.id, order.sellerAgentId));
+
+      return updated[0];
+    });
+
+    if (!txResult) {
+      return c.json(
+        { error: 'conflict', message: 'Order is not disputed or was already resolved' },
+        409,
+      );
+    }
+
+    // Escrow is called AFTER the DB transaction commits so that a DB failure
+    // never leaves money in a moved state with the order still disputed.
     const { netAmount } = await releaseEscrowForOrder({
       orderId,
       sellerAgentId: order.sellerAgentId,
       totalAmount: price,
     });
 
-    // Update order: status → completed, save resolution notes
-    await db.update(gigOrders).set({
-      status: 'completed',
-      disputeResolution: notes,
-      completedAt: new Date(),
-      updatedAt: new Date(),
-    }).where(eq(gigOrders.id, orderId));
-
-    // Update seller stats
-    await db.update(agents).set({
-      tasksCompleted: sql`tasks_completed + 1`,
-      updatedAt: sql`NOW()`,
-    }).where(eq(agents.id, order.sellerAgentId));
-
+    // Reputation update is non-critical; run after escrow.
     await updateReputation(order.sellerAgentId, REPUTATION.TASK_COMPLETED);
 
-    // Webhooks to both parties
-    const disputePayload = {
-      order_id: orderId,
-      gig_id: order.gigId,
-      resolution: 'seller_wins',
-      notes,
-    };
-    fireWebhook(order.sellerAgentId, 'gig_order.dispute_resolved', {
-      ...disputePayload,
-      earned_points: netAmount,
-    });
-    fireWebhook(order.buyerAgentId, 'gig_order.dispute_resolved', disputePayload);
+    // Webhooks are fire-and-forget — delivery failures are non-fatal.
+    const disputePayload = { order_id: orderId, gig_id: order.gigId, resolution: 'seller_wins', notes };
+    void fireWebhook(order.sellerAgentId, 'gig_order.dispute_resolved', { ...disputePayload, earned_points: netAmount });
+    void fireWebhook(order.buyerAgentId, 'gig_order.dispute_resolved', disputePayload);
 
-    const [updated] = await db.select().from(gigOrders).where(eq(gigOrders.id, orderId)).limit(1);
     return c.json({
-      id: updated!.id,
-      status: updated!.status,
+      id: orderId,
+      status: 'completed',
       resolution: 'seller_wins',
       notes,
       earned_points: netAmount,
-      completed_at: updated!.completedAt?.toISOString() ?? null,
+      completed_at: txResult.completedAt?.toISOString() ?? null,
     }, 200);
 
   } else {
-    // buyer_wins: refund escrow to buyer
+    // -------------------------------------------------------------------------
+    // buyer_wins path
+    //
+    // Same strategy: atomic DB update first, escrow last.
+    // -------------------------------------------------------------------------
+    const now = new Date();
+
+    const txResult = await dbDirect.transaction(async (tx) => {
+      const updated = await tx
+        .update(gigOrders)
+        .set({
+          status: 'cancelled',
+          disputeResolution: notes,
+          cancelledAt: now,
+          updatedAt: now,
+        })
+        .where(and(eq(gigOrders.id, orderId), eq(gigOrders.status, 'disputed')))
+        .returning({ id: gigOrders.id, cancelledAt: gigOrders.cancelledAt });
+
+      if (updated.length === 0) return null;
+
+      return updated[0];
+    });
+
+    if (!txResult) {
+      return c.json(
+        { error: 'conflict', message: 'Order is not disputed or was already resolved' },
+        409,
+      );
+    }
+
+    // Escrow refund called AFTER the DB transaction commits.
     await refundEscrowForOrder({
       buyerAgentId: order.buyerAgentId,
       amount: price,
       orderId,
     });
 
-    // Update order: status → cancelled, save resolution notes
-    await db.update(gigOrders).set({
-      status: 'cancelled',
-      disputeResolution: notes,
-      cancelledAt: new Date(),
-      updatedAt: new Date(),
-    }).where(eq(gigOrders.id, orderId));
+    // Webhooks are fire-and-forget — delivery failures are non-fatal.
+    const disputePayload = { order_id: orderId, gig_id: order.gigId, resolution: 'buyer_wins', notes };
+    void fireWebhook(order.buyerAgentId, 'gig_order.dispute_resolved', { ...disputePayload, refund_points: price });
+    void fireWebhook(order.sellerAgentId, 'gig_order.dispute_resolved', disputePayload);
 
-    // Webhooks to both parties
-    const disputePayload = {
-      order_id: orderId,
-      gig_id: order.gigId,
-      resolution: 'buyer_wins',
-      notes,
-    };
-    fireWebhook(order.buyerAgentId, 'gig_order.dispute_resolved', {
-      ...disputePayload,
-      refund_points: price,
-    });
-    fireWebhook(order.sellerAgentId, 'gig_order.dispute_resolved', disputePayload);
-
-    const [updated] = await db.select().from(gigOrders).where(eq(gigOrders.id, orderId)).limit(1);
     return c.json({
-      id: updated!.id,
-      status: updated!.status,
+      id: orderId,
+      status: 'cancelled',
       resolution: 'buyer_wins',
       notes,
       refund_points: price,
-      cancelled_at: updated!.cancelledAt?.toISOString() ?? null,
+      cancelled_at: txResult.cancelledAt?.toISOString() ?? null,
     }, 200);
   }
 });

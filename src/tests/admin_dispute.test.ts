@@ -86,16 +86,13 @@ async function assertStatus(resp: Response, expected: number, label: string): Pr
 // Setup / Cleanup
 // ---------------------------------------------------------------------------
 async function cleanupData() {
-  const agentSet = sql`
-    SELECT id FROM agents
-    WHERE id IN (${SELLER_ID}, ${BUYER_ID})
-       OR owner_twitter IN (${TEST_TWITTERS[0]}, ${TEST_TWITTERS[1]})
-  `;
-
-  await db.execute(sql`DELETE FROM transactions WHERE from_agent_id IN (${agentSet}) OR to_agent_id IN (${agentSet})`);
-  await db.execute(sql`DELETE FROM order_messages WHERE sender_agent_id IN (${agentSet}) OR recipient_agent_id IN (${agentSet})`);
-  await db.execute(sql`DELETE FROM gig_orders WHERE buyer_agent_id IN (${agentSet}) OR seller_agent_id IN (${agentSet})`);
-  await db.execute(sql`DELETE FROM gigs WHERE creator_agent_id IN (${agentSet})`);
+  // Use direct value lists instead of subqueries — Drizzle's sql`` tag treats
+  // interpolated sql`` objects as parameter bindings, not inline SQL, so a
+  // SELECT subquery inside ${...} would be bound incorrectly at runtime.
+  await db.execute(sql`DELETE FROM transactions WHERE from_agent_id IN (${SELLER_ID}, ${BUYER_ID}) OR to_agent_id IN (${SELLER_ID}, ${BUYER_ID})`);
+  await db.execute(sql`DELETE FROM order_messages WHERE sender_agent_id IN (${SELLER_ID}, ${BUYER_ID}) OR recipient_agent_id IN (${SELLER_ID}, ${BUYER_ID})`);
+  await db.execute(sql`DELETE FROM gig_orders WHERE buyer_agent_id IN (${SELLER_ID}, ${BUYER_ID}) OR seller_agent_id IN (${SELLER_ID}, ${BUYER_ID})`);
+  await db.execute(sql`DELETE FROM gigs WHERE creator_agent_id IN (${SELLER_ID}, ${BUYER_ID})`);
   await db.execute(sql`DELETE FROM agents WHERE id IN (${SELLER_ID}, ${BUYER_ID}) OR owner_twitter IN (${TEST_TWITTERS[0]}, ${TEST_TWITTERS[1]})`);
 }
 
