@@ -24,6 +24,8 @@ import { filesRouter } from './routes/files.js';
 import { adminRouter } from './routes/admin.js';
 import { recurringTasksAdminRouter } from './routes/recurringTasks.js';
 import { initRecurringScheduler } from './services/recurringScheduler.js';
+import { runDailyEmission } from './services/emissionService.js';
+import cron from 'node-cron';
 
 const app = new Hono();
 
@@ -181,3 +183,10 @@ setInterval(() => runValidationDeadlineResolution().catch(() => {}), 60_000);
 initRecurringScheduler().catch((err) => {
   console.error('Failed to initialize recurring scheduler:', err);
 });
+
+// Daily emission cron — runs at 00:00 UTC every day
+cron.schedule('0 0 * * *', () => {
+  runDailyEmission().catch((err) => {
+    console.error('[EmissionService] Daily emission cron failed:', err);
+  });
+}, { timezone: 'UTC' });

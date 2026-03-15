@@ -14,6 +14,7 @@ import {
   transactions,
   x402Payments,
 } from '../db/schema/index.js';
+import { runDailyEmission } from '../services/emissionService.js';
 
 export const adminRouter = new Hono();
 
@@ -397,4 +398,33 @@ adminRouter.get('/stats', async (c) => {
       usdc: parseFloat(platformFees[0]?.usdc_fees ?? '0'),
     },
   });
+});
+
+// ---------------------------------------------------------------------------
+// POST /v1/admin/economy/run-emission
+// ---------------------------------------------------------------------------
+
+/**
+ * POST /v1/admin/economy/run-emission
+ * Manually trigger the daily emission run (for testing / backfill).
+ * Protected by ADMIN_SECRET.
+ */
+adminRouter.post('/economy/run-emission', async (c) => {
+  try {
+    const result = await runDailyEmission();
+    return c.json({
+      ok: true,
+      run_at: result.runAt.toISOString(),
+      verified_agent_count: result.verifiedAgentCount,
+      base_emission: result.baseEmission,
+      eligible_agents: result.eligibleAgents,
+      total_shells_emitted: result.totalShellsEmitted,
+      skipped_cap: result.skippedCap,
+      skipped_inactive: result.skippedInactive,
+    });
+  } catch (err) {
+    const e = err as Error;
+    console.error('[Admin] run-emission failed:', e);
+    return c.json({ error: 'emission_failed', message: e.message }, 500);
+  }
 });

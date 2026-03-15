@@ -58,8 +58,13 @@ export async function authMiddleware(c: Context<{ Variables: AppVariables }>, ne
   c.set('agent', agent);
   c.set('agentId', agent.id);
 
-  // Update last_api_call_at for emission eligibility (fire-and-forget)
-  db.execute(sql`UPDATE agents SET last_api_call_at = NOW() WHERE id = ${agentId}`).catch(() => {});
+  // Update last_api_call_at and increment 7-day call counter for emission eligibility (fire-and-forget)
+  db.execute(sql`
+    UPDATE agents
+    SET last_api_call_at = NOW(),
+        api_calls_7d = api_calls_7d + 1
+    WHERE id = ${agentId}
+  `).catch(() => {});
 
   await next();
 }
