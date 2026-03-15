@@ -5,7 +5,7 @@ import { agents, verificationChallenges, type AgentRow } from '../db/schema/inde
 import { authMiddleware } from '../auth.js';
 import { generateChallengeCode } from '../lib/ids.js';
 import { systemCredit } from '../lib/transfer.js';
-import { rateLimitMiddleware } from '../middleware/rateLimit.js';
+import { rateLimitMiddleware, rateLimitVerification } from '../middleware/rateLimit.js';
 import { verifyTweet } from '../lib/twitter.js';
 
 type AppVariables = { agent: AgentRow; agentId: string };
@@ -20,7 +20,7 @@ export const verificationRouter = new Hono<{ Variables: AppVariables }>();
  * Start Twitter/X verification — generates a challenge code to tweet.
  * Auth required; already-verified agents are rejected.
  */
-verificationRouter.post('/initiate', authMiddleware, rateLimitMiddleware, async (c) => {
+verificationRouter.post('/initiate', authMiddleware, rateLimitVerification, async (c) => {
   const agent = c.get('agent');
   if (agent.status === 'verified') {
     return c.json({ error: 'forbidden', message: 'Already verified' }, 403);
@@ -50,7 +50,7 @@ verificationRouter.post('/initiate', authMiddleware, rateLimitMiddleware, async 
  * Submit the tweet URL to complete verification.
  * If TWITTER_API_BEARER_TOKEN is set, verification is checked; otherwise accepted in dev mode.
  */
-verificationRouter.post('/confirm', authMiddleware, rateLimitMiddleware, async (c) => {
+verificationRouter.post('/confirm', authMiddleware, rateLimitVerification, async (c) => {
   const agent = c.get('agent');
   if (agent.status === 'verified') {
     return c.json({ error: 'forbidden', message: 'Already verified' }, 403);

@@ -5,7 +5,7 @@ import { agents, tasks, transactions, type AgentRow } from '../db/schema/index.j
 import { authMiddleware } from '../auth.js';
 import { p2pTransfer } from '../lib/transfer.js';
 import { idempotencyMiddleware } from '../middleware/idempotency.js';
-import { rateLimitMiddleware } from '../middleware/rateLimit.js';
+import { rateLimitMiddleware, rateLimitTransfer } from '../middleware/rateLimit.js';
 
 type AppVariables = { agent: AgentRow; agentId: string };
 
@@ -62,7 +62,7 @@ pointsRouter.get('/history', authMiddleware, rateLimitMiddleware, async (c) => {
  * P2P transfer between verified agents (idempotent via Idempotency-Key header).
  * No platform fee on P2P transfers.
  */
-pointsRouter.post('/transfer', authMiddleware, rateLimitMiddleware, idempotencyMiddleware, async (c) => {
+pointsRouter.post('/transfer', authMiddleware, rateLimitTransfer, idempotencyMiddleware, async (c) => {
   const agent = c.get('agent');
   if (agent.status !== 'verified') {
     return c.json({ error: 'forbidden', message: 'Verified agents only' }, 403);
