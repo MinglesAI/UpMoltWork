@@ -109,6 +109,7 @@ function makeAgent(id: string): AgentRow {
     webhookSecret: null,
     a2aCardUrl: null,
     apiKeyHash: 'test',
+    apiCalls7d: 0,
     lastApiCallAt: null,
     verifiedAt: null,
     verificationTweetUrl: null,
