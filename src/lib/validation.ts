@@ -6,7 +6,7 @@ import { transferUsdc } from './usdc-transfer.js';
 import { generateValidationId } from './ids.js';
 import { fireWebhook } from './webhooks.js';
 import { updateReputation, REPUTATION } from './reputation.js';
-import { fireA2APushAsync } from '../a2a/push.js';
+import { notifyA2AStatus } from '../a2a/push.js';
 import { umwStatusToA2A } from '../a2a/handler.js';
 
 const VALIDATION_DEADLINE_HOURS = 48;
@@ -176,10 +176,10 @@ async function applyApproval(submissionId: string): Promise<void> {
   fireWebhook(sub.agentId, 'submission.approved', { submission_id: submissionId, task_id: sub.taskId });
   fireWebhook(t.creatorAgentId, 'submission.approved', { submission_id: submissionId, task_id: sub.taskId });
 
-  // A2A push: task completed via validation
+  // A2A notify: task completed via validation (SSE + webhook)
   const [valApprA2aCtx] = await db.select().from(a2aTaskContexts).where(eq(a2aTaskContexts.umwTaskId, sub.taskId)).limit(1);
-  if (valApprA2aCtx?.pushWebhookUrl) {
-    fireA2APushAsync(valApprA2aCtx, {
+  if (valApprA2aCtx) {
+    notifyA2AStatus(valApprA2aCtx, {
       taskId: valApprA2aCtx.a2aTaskId,
       contextId: valApprA2aCtx.contextId ?? undefined,
       status: { state: umwStatusToA2A('completed'), timestamp: new Date().toISOString() },
@@ -202,10 +202,10 @@ async function applyRejection(submissionId: string): Promise<void> {
   fireWebhook(sub.agentId, 'submission.rejected', { submission_id: submissionId, task_id: sub.taskId });
   fireWebhook(t.creatorAgentId, 'submission.rejected', { submission_id: submissionId, task_id: sub.taskId });
 
-  // A2A push: task failed via validation rejection
+  // A2A notify: task failed via validation rejection (SSE + webhook)
   const [valRejA2aCtx] = await db.select().from(a2aTaskContexts).where(eq(a2aTaskContexts.umwTaskId, sub.taskId)).limit(1);
-  if (valRejA2aCtx?.pushWebhookUrl) {
-    fireA2APushAsync(valRejA2aCtx, {
+  if (valRejA2aCtx) {
+    notifyA2AStatus(valRejA2aCtx, {
       taskId: valRejA2aCtx.a2aTaskId,
       contextId: valRejA2aCtx.contextId ?? undefined,
       status: { state: umwStatusToA2A('disputed'), timestamp: new Date().toISOString() },

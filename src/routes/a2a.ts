@@ -8,10 +8,10 @@ import { handleA2ARequest, toA2ATask, umwStatusToA2A } from '../a2a/handler.js';
 import {
   type JsonRpcRequest,
   type A2ATask,
-  type TaskStatusUpdateEvent,
   A2AErrorCode,
   A2AMethods,
 } from '../a2a/types.js';
+import { sseEmitter, taskStatusEvent, type TaskStatusPayload } from '../a2a/sse.js';
 
 type AppVariables = { agent: AgentRow; agentId: string };
 
@@ -56,29 +56,38 @@ a2aRouter.post('/', authMiddleware, async (c) => {
 });
 
 // ---------------------------------------------------------------------------
+// SSE constants
+// ---------------------------------------------------------------------------
+
+/** Terminal A2A states — stream closes when task reaches one of these. */
+const TERMINAL_STATES = new Set(['completed', 'failed', 'canceled', 'rejected', 'unknown']);
+
+/** Heartbeat interval (ms). Keeps proxy/NAT connections alive. */
+const HEARTBEAT_MS = 30_000;
+
+/** Maximum SSE connection lifetime (ms). Client must reconnect after this. */
+const MAX_LIFETIME_MS = 30 * 60 * 1000; // 30 minutes
+
+// ---------------------------------------------------------------------------
 // SSE handler
 // ---------------------------------------------------------------------------
 
-// Terminal states — SSE stream closes when task reaches one of these
-const TERMINAL_STATES = new Set(['completed', 'failed', 'canceled', 'rejected', 'unknown']);
-const POLL_INTERVAL_MS = 2_000;
-
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function handleSSE(c: any, req: JsonRpcRequest, agent: AgentRow) {
-  // For message/stream: first create/validate the task
-  // For tasks/subscribe: look up existing task
-
   return streamSSE(c, async (stream) => {
-    let a2aTaskId: string | null = null;
-    let contextId: string | null = null;
-    let currentState: string | null = null;
     let closed = false;
 
     stream.onAbort(() => {
       closed = true;
     });
 
-    // --- Initial setup ---
+    // -----------------------------------------------------------------------
+    // Step 1: Resolve the A2A task
+    // -----------------------------------------------------------------------
+    let a2aTaskId: string | null = null;
+    let contextId: string | null = null;
+    let currentState: string | null = null;
+
     if (req.method === A2AMethods.MessageStream || req.method === A2AMethods.MessageSend) {
       // Create task then stream
       const initResponse = await handleA2ARequest(req, agent);
@@ -100,15 +109,20 @@ async function handleSSE(c: any, req: JsonRpcRequest, agent: AgentRow) {
 
       // Emit initial task object
       await stream.writeSSE({
-        event: 'task',
+        id: '1',
+        event: 'task-status',
         data: JSON.stringify({
           jsonrpc: '2.0',
           id: req.id ?? null,
-          result: task,
+          result: {
+            kind: 'task',
+            id: task.id,
+            status: task.status,
+            final: TERMINAL_STATES.has(task.status.state),
+          },
         }),
       });
     } else if (req.method === A2AMethods.TasksSubscribe) {
-      // Subscribe to existing task
       const params = req.params as { id?: string };
       const taskId = params?.id;
       if (!taskId) {
@@ -157,33 +171,29 @@ async function handleSSE(c: any, req: JsonRpcRequest, agent: AgentRow) {
       a2aTaskId = taskId;
       contextId = ctx.contextId ?? null;
       currentState = umwStatusToA2A(task.status);
+      const isFinalNow = TERMINAL_STATES.has(currentState);
 
-      // If already terminal, return an error (per spec: UnsupportedOperation for terminal tasks)
-      if (TERMINAL_STATES.has(currentState)) {
-        await stream.writeSSE({
-          event: 'error',
-          data: JSON.stringify({
-            jsonrpc: '2.0',
-            id: req.id ?? null,
-            error: {
-              code: A2AErrorCode.UnsupportedOperation,
-              message: `Cannot subscribe to task in terminal state "${currentState}"`,
-            },
-          }),
-        });
-        return;
-      }
-
-      // Emit current state
-      const a2aTask = toA2ATask(task, ctx);
+      // Send initial status
       await stream.writeSSE({
-        event: 'task',
+        id: '1',
+        event: 'task-status',
         data: JSON.stringify({
           jsonrpc: '2.0',
           id: req.id ?? null,
-          result: a2aTask,
+          result: {
+            kind: 'task',
+            id: taskId,
+            status: {
+              state: currentState,
+              timestamp: task.updatedAt?.toISOString() ?? new Date().toISOString(),
+            },
+            final: isFinalNow,
+          },
         }),
       });
+
+      // If already terminal → close immediately (one final event + done)
+      if (isFinalNow) return;
     } else {
       await stream.writeSSE({
         event: 'error',
@@ -198,59 +208,90 @@ async function handleSSE(c: any, req: JsonRpcRequest, agent: AgentRow) {
 
     if (!a2aTaskId) return;
 
-    // --- Poll for status changes ---
-    while (!closed) {
-      if (TERMINAL_STATES.has(currentState ?? '')) break;
+    // -----------------------------------------------------------------------
+    // Step 2: Subscribe via EventEmitter (event-driven, no polling)
+    // -----------------------------------------------------------------------
+    let eventCounter = 2; // id:1 was the initial event
 
-      await sleep(POLL_INTERVAL_MS);
-      if (closed) break;
+    // Promise that resolves when the stream should end
+    let resolveStream!: () => void;
+    const streamDone = new Promise<void>((resolve) => {
+      resolveStream = resolve;
+    });
+
+    const onStatusUpdate = async (payload: TaskStatusPayload) => {
+      if (closed) {
+        resolveStream();
+        return;
+      }
+
+      const isFinal = payload.final || TERMINAL_STATES.has(payload.state);
+      currentState = payload.state;
 
       try {
-        // Lookup via a2a_task_id
-        const [ctx] = await db
-          .select()
-          .from(a2aTaskContexts)
-          .where(eq(a2aTaskContexts.a2aTaskId, a2aTaskId))
-          .limit(1);
-
-        if (!ctx) break;
-
-        const [task] = await db.select().from(tasks).where(eq(tasks.id, ctx.umwTaskId)).limit(1);
-        if (!task) break;
-
-        const newState = umwStatusToA2A(task.status);
-
-        if (newState !== currentState) {
-          currentState = newState;
-          const isFinal = TERMINAL_STATES.has(newState);
-          const statusEvent: TaskStatusUpdateEvent = {
-            taskId: a2aTaskId,
-            contextId: contextId ?? undefined,
-            status: {
-              state: newState as any,
-              timestamp: task.updatedAt?.toISOString() ?? new Date().toISOString(),
+        await stream.writeSSE({
+          id: String(eventCounter++),
+          event: 'task-status',
+          data: JSON.stringify({
+            jsonrpc: '2.0',
+            id: req.id ?? null,
+            result: {
+              kind: 'task',
+              id: a2aTaskId,
+              status: {
+                state: payload.state,
+                timestamp: payload.timestamp,
+              },
+              final: isFinal,
             },
-            final: isFinal,
-          };
-
-          await stream.writeSSE({
-            event: 'taskStatusUpdate',
-            data: JSON.stringify({
-              jsonrpc: '2.0',
-              id: req.id ?? null,
-              result: statusEvent,
-            }),
-          });
-
-          if (isFinal) break;
-        }
+          }),
+        });
       } catch {
-        break;
+        closed = true;
       }
+
+      if (isFinal || closed) {
+        resolveStream();
+      }
+    };
+
+    // Register EventEmitter listener
+    const eventName = taskStatusEvent(a2aTaskId);
+    sseEmitter.on(eventName, onStatusUpdate);
+
+    // -----------------------------------------------------------------------
+    // Step 3: Heartbeat + timeout management
+    // -----------------------------------------------------------------------
+    const heartbeatTimer = setInterval(async () => {
+      if (closed) {
+        resolveStream();
+        return;
+      }
+      try {
+        await stream.writeSSE({
+          event: 'ping',
+          data: '{}',
+        });
+      } catch {
+        closed = true;
+        resolveStream();
+      }
+    }, HEARTBEAT_MS);
+
+    const lifetimeTimer = setTimeout(() => {
+      resolveStream();
+    }, MAX_LIFETIME_MS);
+
+    // -----------------------------------------------------------------------
+    // Step 4: Wait until stream ends
+    // -----------------------------------------------------------------------
+    try {
+      await streamDone;
+    } finally {
+      // Clean up — always runs
+      clearInterval(heartbeatTimer);
+      clearTimeout(lifetimeTimer);
+      sseEmitter.off(eventName, onStatusUpdate);
     }
   });
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
