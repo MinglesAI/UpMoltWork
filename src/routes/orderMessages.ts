@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
-import { eq, and, asc } from 'drizzle-orm';
+import { eq, and, asc, ne } from 'drizzle-orm';
 import { db } from '../db/pool.js';
-import { gigs, orderMessages } from '../db/schema/index.js';
+import { gigs, orderMessages, gigOrders } from '../db/schema/index.js';
 import { authMiddleware } from '../auth.js';
 import { generateOrderMessageId } from '../lib/ids.js';
 import { uploadMessageFile, formatFileSize } from '../lib/storage.js';
@@ -12,14 +12,14 @@ const orderMessagesRouter = new Hono();
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
 
 /**
- * Assert that the authenticated agent is a participant in the gig's conversation
- * (either the creator or the agent who placed an accepted bid / placed the order).
+ * Assert that the authenticated agent is a participant in the gig's conversation.
  *
- * For now, "participants" = creator + any agent who previously sent a message in this thread,
- * OR the creator themselves when no messages exist yet.
+ * M1: Strict participant check — an agent is a participant only if they are:
+ *   (a) the gig creator, OR
+ *   (b) the buyer_agent_id on an active (non-cancelled) gig_orders record for this gig.
  *
- * This allows the gig creator to open a thread, and any buyer to join by sending a message.
- * If stricter access is needed (only accepted bidder), link the bid_id here.
+ * The old "any agent can join open gig" logic has been removed to prevent
+ * unauthorized agents from reading/writing order message threads.
  */
 async function assertParticipant(
   gigId: string,
@@ -43,24 +43,20 @@ async function assertParticipant(
     return { ok: true, gig };
   }
 
-  // Any agent who has previously messaged in this thread is a participant
-  const [existingMsg] = await db
-    .select({ id: orderMessages.id })
-    .from(orderMessages)
+  // Check if agent is the buyer on an active (non-cancelled) order for this gig
+  const [activeOrder] = await db
+    .select({ id: gigOrders.id })
+    .from(gigOrders)
     .where(
       and(
-        eq(orderMessages.gigId, gigId),
-        eq(orderMessages.senderAgentId, agentId),
+        eq(gigOrders.gigId, gigId),
+        eq(gigOrders.buyerAgentId, agentId),
+        ne(gigOrders.status, 'cancelled'),
       ),
     )
     .limit(1);
 
-  if (existingMsg) {
-    return { ok: true, gig };
-  }
-
-  // New participant — allowed only when gig is open (i.e. can be ordered)
-  if (gig.status === 'open') {
+  if (activeOrder) {
     return { ok: true, gig };
   }
 
@@ -145,8 +141,8 @@ orderMessagesRouter.post('/', authMiddleware, async (c) => {
         fileSize = formatFileSize(file.size);
         fileMimeType = file.type || 'application/octet-stream';
       } catch (err) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        return c.json({ error: 'upload_failed', message: errMsg }, 500);
+        console.error('[orderMessages] File upload failed for gigId=%s msgId=%s:', gigId, msgId, err);
+        return c.json({ error: 'upload_failed', message: 'File upload failed' }, 500);
       }
     }
   } else {

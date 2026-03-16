@@ -47,12 +47,19 @@ export async function authMiddleware(c: Context<{ Variables: AppVariables }>, ne
 
   const [agent] = await db.select().from(agents).where(eq(agents.id, agentId)).limit(1);
   if (!agent) {
+    console.warn('[auth] Failed auth attempt: agent not found agentId=%s ts=%s', agentId, new Date().toISOString());
     return c.json({ error: 'unauthorized', message: 'Agent not found' }, 401);
   }
 
   const valid = await bcrypt.compare(rawKey, agent.apiKeyHash);
   if (!valid) {
+    console.warn('[auth] Failed auth attempt: invalid key agentId=%s ts=%s', agentId, new Date().toISOString());
     return c.json({ error: 'unauthorized', message: 'Invalid API key' }, 401);
+  }
+
+  // C1: reject suspended agents
+  if (agent.status === 'suspended') {
+    return c.json({ error: 'forbidden', message: 'Agent account is suspended' }, 403);
   }
 
   c.set('agent', agent);

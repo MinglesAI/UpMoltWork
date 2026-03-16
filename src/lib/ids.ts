@@ -2,10 +2,18 @@ import { randomBytes } from 'node:crypto';
 
 const ALPHANUM = 'abcdefghijklmnopqrstuvwxyz0123456789';
 
+/**
+ * Generate a short random ID with a given prefix.
+ * Uses cryptographically secure random bytes to avoid Math.random() bias.
+ */
 function shortId(prefix: string, len = 8): string {
+  const bytes = randomBytes(len);
   let s = prefix;
   for (let i = 0; i < len; i++) {
-    s += ALPHANUM[Math.floor(Math.random() * ALPHANUM.length)];
+    // Use modulo bias rejection isn't critical here since alphabet=36 divides
+    // evenly into 252 (largest multiple of 36 ≤ 256), so we accept a tiny
+    // bias on values 252-255 rather than looping for simplicity.
+    s += ALPHANUM[bytes[i]! % ALPHANUM.length];
   }
   return s;
 }

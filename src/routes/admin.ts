@@ -6,6 +6,7 @@
  */
 
 import { Hono } from 'hono';
+import crypto from 'node:crypto';
 import { desc, eq, and, sql, count, sum } from 'drizzle-orm';
 import { db, dbDirect } from '../db/pool.js';
 import {
@@ -36,7 +37,17 @@ adminRouter.use('*', async (c, next) => {
   const auth = c.req.header('Authorization');
   const token = auth?.startsWith('Bearer ') ? auth.slice(7).trim() : null;
 
-  if (!token || token !== secret) {
+  // H3: Use timing-safe comparison to prevent timing attacks
+  let tokenValid = false;
+  if (token) {
+    try {
+      tokenValid = crypto.timingSafeEqual(Buffer.from(token), Buffer.from(secret));
+    } catch {
+      // Length mismatch throws — treat as invalid
+      tokenValid = false;
+    }
+  }
+  if (!tokenValid) {
     return c.json({ error: 'forbidden', message: 'Invalid or missing admin token' }, 403);
   }
 

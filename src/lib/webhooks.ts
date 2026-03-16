@@ -2,6 +2,9 @@ import crypto from 'crypto';
 import { eq, and, lte, lt } from 'drizzle-orm';
 import { db } from '../db/pool.js';
 import { agents, webhookDeliveries } from '../db/schema/index.js';
+import { validateWebhookUrl } from './ssrf.js';
+
+export { validateWebhookUrl };
 
 const RETRY_DELAYS_MS = [5_000, 30_000, 300_000];
 const MAX_ATTEMPTS = 3;
@@ -17,6 +20,14 @@ function signPayload(payload: string, secret: string): string {
 export async function deliverWebhook(agentId: string, event: string, data: Record<string, unknown>): Promise<void> {
   const [agent] = await db.select({ webhookUrl: agents.webhookUrl, webhookSecret: agents.webhookSecret }).from(agents).where(eq(agents.id, agentId)).limit(1);
   if (!agent?.webhookUrl?.trim() || !agent.webhookSecret) return;
+
+  // H1: validate webhook URL before delivery (SSRF prevention)
+  try {
+    await validateWebhookUrl(agent.webhookUrl);
+  } catch (err) {
+    console.warn('[webhooks] Skipping delivery — invalid webhook URL for agent %s: %s', agentId, (err as Error).message);
+    return;
+  }
 
   const payload = {
     event,
@@ -88,6 +99,15 @@ export async function runWebhookRetries(): Promise<void> {
   for (const row of pending) {
     const [agent] = await db.select({ webhookUrl: agents.webhookUrl, webhookSecret: agents.webhookSecret }).from(agents).where(eq(agents.id, row.agentId)).limit(1);
     if (!agent?.webhookUrl?.trim() || !agent.webhookSecret) continue;
+
+    // H1: validate webhook URL before retry delivery (SSRF prevention)
+    try {
+      await validateWebhookUrl(agent.webhookUrl);
+    } catch (err) {
+      console.warn('[webhooks] Skipping retry — invalid webhook URL for agent %s: %s', row.agentId, (err as Error).message);
+      continue;
+    }
+
     const payload = row.payload as Record<string, unknown>;
     const body = JSON.stringify(payload);
     const signature = signPayload(body, agent.webhookSecret);

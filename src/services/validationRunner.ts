@@ -119,6 +119,43 @@ async function runLinkValidator(
 }
 
 /**
+ * Allowlist of environment variables passed to the validator child process.
+ * Sensitive secrets are explicitly excluded.
+ */
+const VALIDATOR_ENV_ALLOWLIST = new Set([
+  'PATH',
+  'NODE_ENV',
+  'HOME',
+  'TMPDIR',
+  'TEMP',
+  'TMP',
+  'LANG',
+  'LC_ALL',
+  'LC_CTYPE',
+  'USER',
+  'LOGNAME',
+  'SHELL',
+  'PWD',
+  // Add DATABASE_URL only if validators need DB access (opt-in)
+  // 'DATABASE_URL',
+]);
+
+/**
+ * Build a sanitised env for the validator child process.
+ * Strips secrets: SUPABASE_SECRET_KEY, PLATFORM_EVM_PRIVATE_KEY, ADMIN_SECRET,
+ * INTERNAL_API_SECRET, JWT_SECRET, POSTER_API_KEY, and any key containing
+ * SECRET, KEY, TOKEN, PASSWORD, or PRIVATE in its name.
+ */
+function buildValidatorEnv(): NodeJS.ProcessEnv {
+  const safeEnv: NodeJS.ProcessEnv = {};
+  for (const [k, v] of Object.entries(process.env)) {
+    if (!VALIDATOR_ENV_ALLOWLIST.has(k)) continue;
+    safeEnv[k] = v;
+  }
+  return safeEnv;
+}
+
+/**
  * Run a code validator script via child_process.
  * The script receives submission payload as stdin JSON and must write PASS or FAIL: <reason> to stdout.
  */
@@ -131,17 +168,29 @@ async function runCodeValidator(
     return { outcome: 'error', reason: 'code validator missing "script" in validation_config' };
   }
 
+  // H2a: Validate script name — only allow safe filenames (no path traversal)
+  if (!/^[a-zA-Z0-9_-]+\.ts$/.test(scriptName)) {
+    return { outcome: 'error', reason: `Invalid validator script name: "${scriptName}"` };
+  }
+
   const timeoutMs = ((config.timeout as number | undefined) ?? 30) * 1000;
   const scriptPath = join(VALIDATORS_DIR, scriptName);
+
+  // H2b: Path confinement — ensure resolved path stays within VALIDATORS_DIR
+  const resolvedScriptPath = resolve(scriptPath);
+  if (!resolvedScriptPath.startsWith(VALIDATORS_DIR + '/') && resolvedScriptPath !== VALIDATORS_DIR) {
+    return { outcome: 'error', reason: `Validator script path escapes validators directory` };
+  }
 
   return new Promise<ValidationResult>((resolvePromise) => {
     let stdout = '';
     let stderr = '';
     let timedOut = false;
 
-    const child = spawn('npx', ['tsx', scriptPath], {
+    // H2c: Strip sensitive env vars from child process
+    const child = spawn('npx', ['tsx', resolvedScriptPath], {
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: process.env,
+      env: buildValidatorEnv(),
     });
 
     const timer = setTimeout(() => {
