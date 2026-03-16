@@ -96,12 +96,32 @@ initRedis().catch(() => {});
 // Helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * Extract the real client IP for rate limiting.
+ *
+ * M6: Only trust X-Forwarded-For / X-Real-IP headers when TRUSTED_PROXY=true
+ * is set in the environment. This prevents IP spoofing attacks where a client
+ * sends a forged X-Forwarded-For header to bypass rate limits.
+ *
+ * Production requirement: set TRUSTED_PROXY=true and configure your reverse
+ * proxy (e.g. Traefik) to strip/replace X-Forwarded-For so only the proxy's
+ * value is trusted.
+ *
+ * Without TRUSTED_PROXY=true, falls back to 'unknown' (rate limits will key
+ * on 'unknown' which is safe but not per-IP — use agentId keying for auth'd
+ * endpoints instead).
+ */
 function getClientIp(c: Context): string {
-  return (
-    c.req.header('x-forwarded-for')?.split(',')[0]?.trim() ??
-    c.req.header('x-real-ip') ??
-    'unknown'
-  );
+  const trustedProxy = process.env.TRUSTED_PROXY === 'true';
+  if (trustedProxy) {
+    return (
+      c.req.header('x-forwarded-for')?.split(',')[0]?.trim() ??
+      c.req.header('x-real-ip') ??
+      'unknown'
+    );
+  }
+  // Without trusted proxy config, we cannot safely use forwarded headers
+  return 'unknown';
 }
 
 // ---------------------------------------------------------------------------

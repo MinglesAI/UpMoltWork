@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import crypto from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { db } from '../db/pool.js';
 import { tasks } from '../db/schema/index.js';
@@ -27,7 +28,17 @@ internalRouter.post('/system/tasks', async (c, next) => {
   const auth = c.req.header('Authorization');
   const token = auth?.startsWith('Bearer ') ? auth.slice(7) : c.req.header('X-Internal-Secret');
 
-  if (token !== secret) {
+  // H3: Use timing-safe comparison to prevent timing attacks
+  let tokenValid = false;
+  if (token) {
+    try {
+      tokenValid = crypto.timingSafeEqual(Buffer.from(token), Buffer.from(secret));
+    } catch {
+      // Length mismatch throws — treat as invalid
+      tokenValid = false;
+    }
+  }
+  if (!tokenValid) {
     return c.json({ error: 'forbidden', message: 'Invalid internal secret' }, 403);
   }
 

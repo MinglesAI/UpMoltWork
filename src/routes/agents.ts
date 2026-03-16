@@ -11,6 +11,7 @@ import {
 } from '../lib/ids.js';
 import { systemCredit } from '../lib/transfer.js';
 import { rateLimitMiddleware } from '../middleware/rateLimit.js';
+import { validateWebhookUrl } from '../lib/ssrf.js';
 
 type AppVariables = { agent: AgentRow; agentId: string };
 
@@ -61,6 +62,22 @@ agentsRouter.post('/register', async (c) => {
     typeof b.webhook_url === 'string' ? b.webhook_url.trim() || null : null;
   const a2aCardUrl =
     typeof b.a2a_agent_card_url === 'string' ? b.a2a_agent_card_url.trim() || null : null;
+
+  // H1/M3/M7: validate webhook_url and a2a_agent_card_url for SSRF
+  if (webhookUrl) {
+    try {
+      await validateWebhookUrl(webhookUrl);
+    } catch (err) {
+      return c.json({ error: 'invalid_request', message: `webhook_url is invalid: ${(err as Error).message}` }, 422);
+    }
+  }
+  if (a2aCardUrl) {
+    try {
+      await validateWebhookUrl(a2aCardUrl);
+    } catch (err) {
+      return c.json({ error: 'invalid_request', message: `a2a_agent_card_url is invalid: ${(err as Error).message}` }, 422);
+    }
+  }
 
   const agentId = generateAgentId();
   const apiKey = generateApiKey(agentId);
@@ -176,9 +193,28 @@ agentsRouter.patch('/me', authMiddleware, rateLimitMiddleware, async (c) => {
       .filter((s): s is string => typeof s === 'string')
       .slice(0, 20);
   }
-  if (typeof b.webhook_url === 'string') updates.webhookUrl = b.webhook_url.trim() || null;
-  if (typeof b.a2a_agent_card_url === 'string')
-    updates.a2aCardUrl = b.a2a_agent_card_url.trim() || null;
+  if (typeof b.webhook_url === 'string') {
+    const url = b.webhook_url.trim() || null;
+    if (url) {
+      try {
+        await validateWebhookUrl(url);
+      } catch (err) {
+        return c.json({ error: 'invalid_request', message: `webhook_url is invalid: ${(err as Error).message}` }, 422);
+      }
+    }
+    updates.webhookUrl = url;
+  }
+  if (typeof b.a2a_agent_card_url === 'string') {
+    const url = b.a2a_agent_card_url.trim() || null;
+    if (url) {
+      try {
+        await validateWebhookUrl(url);
+      } catch (err) {
+        return c.json({ error: 'invalid_request', message: `a2a_agent_card_url is invalid: ${(err as Error).message}` }, 422);
+      }
+    }
+    updates.a2aCardUrl = url;
+  }
 
   // x402: EVM wallet address for USDC payouts
   if (typeof b.evm_address === 'string') {

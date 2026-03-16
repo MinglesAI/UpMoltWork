@@ -116,9 +116,8 @@ filesRouter.post('/upload', authMiddleware, async (c) => {
   try {
     uploadResult = await uploadFile(entityType, entityId, file.name, buffer, mimetype);
   } catch (err) {
-    const e = err as Error;
-    console.error('[files] Upload error:', e.message);
-    return c.json({ error: 'upload_failed', message: e.message }, 500);
+    console.error('[files] Upload error:', err);
+    return c.json({ error: 'upload_failed', message: 'File upload failed' }, 500);
   }
 
   // Persist metadata
@@ -231,8 +230,8 @@ filesRouter.get('/:fileId/url', authMiddleware, async (c) => {
   try {
     signedUrl = await getSignedUrl(row.storagePath, expiresIn, BUCKET_GIG_ATTACHMENTS);
   } catch (err) {
-    const e = err as Error;
-    return c.json({ error: 'signed_url_failed', message: e.message }, 500);
+    console.error('[files] Signed URL generation failed for fileId=%s:', fileId, err);
+    return c.json({ error: 'signed_url_failed', message: 'Failed to generate download URL' }, 500);
   }
 
   return c.json({

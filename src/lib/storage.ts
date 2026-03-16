@@ -156,7 +156,8 @@ export async function uploadFile(
     .upload(path, data, { contentType, upsert: false });
 
   if (error) {
-    throw new Error(`Storage upload failed: ${error.message}`);
+    console.error('[storage] Upload failed for bucket=%s path=%s:', bucket, path, error.message);
+    throw new Error('Storage upload failed');
   }
 
   const result: UploadResult = { path: uploadData.path };
@@ -171,10 +172,11 @@ export async function uploadFile(
 }
 
 /**
- * Upload a message file attachment to the order-message-files bucket.
- * Returns a public URL for the stored file.
+ * Upload a message file attachment to the order-message-files bucket (private).
+ * Returns a signed URL valid for 1 hour.
  *
- * Kept for backward compatibility with the order messages router.
+ * L2: order-message-files is a private bucket — always use signed URLs rather
+ * than constructing a manual public URL which would bypass bucket access controls.
  */
 export async function uploadMessageFile(
   gigId: string,
@@ -191,11 +193,9 @@ export async function uploadMessageFile(
     mimeType,
   );
 
-  // If no publicUrl (private bucket), build one manually for backward compat
-  const supabaseUrl = process.env.SUPABASE_URL;
-  if (!supabaseUrl) throw new Error('SUPABASE_URL is not configured');
-  const url = result.publicUrl ?? `${supabaseUrl}/storage/v1/object/public/${BUCKET_ORDER_MESSAGES}/${result.path}`;
-  return { url };
+  // Generate a signed URL for the private bucket (1 hour TTL)
+  const signedUrl = await getSignedUrl(result.path, 3600, BUCKET_ORDER_MESSAGES);
+  return { url: signedUrl };
 }
 
 // ---------------------------------------------------------------------------
@@ -236,7 +236,8 @@ export async function getSignedUrl(
     .createSignedUrl(storagePath, expiresInSeconds);
 
   if (error || !data?.signedUrl) {
-    throw new Error(`Failed to generate signed URL: ${error?.message ?? 'unknown error'}`);
+    console.error('[storage] Signed URL generation failed for bucket=%s path=%s:', bucket, storagePath, error?.message);
+    throw new Error('Failed to generate signed URL');
   }
   return data.signedUrl;
 }
@@ -256,6 +257,7 @@ export async function deleteFile(storagePath: string, bucket = BUCKET_GIG_ATTACH
   const supabase = getSupabaseClient();
   const { error } = await supabase.storage.from(bucket).remove([storagePath]);
   if (error) {
-    throw new Error(`Storage delete failed: ${error.message}`);
+    console.error('[storage] Delete failed for bucket=%s path=%s:', bucket, storagePath, error.message);
+    throw new Error('Storage delete failed');
   }
 }

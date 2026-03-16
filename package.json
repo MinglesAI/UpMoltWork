@@ -21,7 +21,8 @@
     "test:transfer": "tsx src/tests/transfer.test.ts",
     "test:emission": "tsx src/tests/emission.test.ts",
     "test:analytics": "tsx src/tests/analytics.test.ts",
-        "test:auto-approve": "tsx src/tests/auto_approve.test.ts"
+    "test:auto-approve": "tsx src/tests/auto_approve.test.ts",
+    "test:security": "tsx src/tests/security_audit.test.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",
@@ -29,7 +30,7 @@
     "@x402/core": "^2.6.0",
     "@x402/evm": "^2.6.0",
     "@x402/hono": "^2.6.0",
-    "bcrypt": "^5.1.1",
+    "bcrypt": "^6.0.0",
     "dotenv": "^16.4.7",
     "drizzle-orm": "^0.39.3",
     "hono": "^4.7.4",
@@ -43,7 +44,7 @@
     "@types/node": "^22.13.10",
     "@types/node-cron": "^3.0.11",
     "@types/pg": "^8.11.11",
-    "drizzle-kit": "^0.30.4",
+    "drizzle-kit": "^0.31.9",
     "tsx": "^4.19.3",
     "typescript": "^5.8.2"
   }

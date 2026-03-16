@@ -2,6 +2,9 @@ import 'dotenv/config';
 import cron from 'node-cron';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
+import { logger } from 'hono/logger';
+import { secureHeaders } from 'hono/secure-headers';
+import { bodyLimit } from 'hono/body-limit';
 import { serve } from '@hono/node-server';
 import { initPool } from './db/pool.js';
 import { openApiSpec } from './openapi.js';
@@ -30,6 +33,29 @@ import { runDailyEmission } from './services/emissionService.js';
 import { runDailyReputationSnapshot } from './services/reputationSnapshotService.js';
 
 const app = new Hono();
+
+// ---------------------------------------------------------------------------
+// Observability: request logging (L4)
+// ---------------------------------------------------------------------------
+app.use('*', logger());
+
+// ---------------------------------------------------------------------------
+// Security headers (M5)
+// ---------------------------------------------------------------------------
+app.use('*', secureHeaders());
+
+// ---------------------------------------------------------------------------
+// Body size limit: 1 MB for all JSON endpoints (M2)
+// File upload endpoints have their own per-read limits but this adds a
+// pre-read guard for non-multipart requests.
+// ---------------------------------------------------------------------------
+app.use(
+  '*',
+  bodyLimit({
+    maxSize: 1 * 1024 * 1024, // 1 MB
+    onError: (c) => c.json({ error: 'payload_too_large', message: 'Request body exceeds 1 MB limit' }, 413),
+  }),
+);
 
 // ---------------------------------------------------------------------------
 // CORS
