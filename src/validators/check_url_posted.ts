@@ -17,6 +17,7 @@
  */
 
 import { readFileSync } from 'node:fs';
+import { validateOutboundUrl, SsrfBlockedError } from '../lib/ssrfGuard.js';
 
 interface ValidatorInput {
   result_url?: string;
@@ -55,6 +56,17 @@ async function main() {
   if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
     process.stdout.write(`FAIL: URL must use http or https protocol\n`);
     process.exit(1);
+  }
+
+  // SSRF guard: block private/internal IP ranges
+  try {
+    await validateOutboundUrl(url);
+  } catch (err) {
+    if (err instanceof SsrfBlockedError) {
+      process.stdout.write(`FAIL: SSRF blocked — ${err.reason}\n`);
+      process.exit(1);
+    }
+    throw err;
   }
 
   // Fetch the URL (HEAD first, fall back to GET)
