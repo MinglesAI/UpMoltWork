@@ -2,9 +2,7 @@ import crypto from 'crypto';
 import { eq, and, lte, lt } from 'drizzle-orm';
 import { db } from '../db/pool.js';
 import { agents, webhookDeliveries } from '../db/schema/index.js';
-import { validateWebhookUrl } from './ssrf.js';
-
-export { validateWebhookUrl };
+import { validateOutboundUrl, SsrfBlockedError } from './ssrfGuard.js';
 
 const RETRY_DELAYS_MS = [5_000, 30_000, 300_000];
 const MAX_ATTEMPTS = 3;
@@ -21,12 +19,15 @@ export async function deliverWebhook(agentId: string, event: string, data: Recor
   const [agent] = await db.select({ webhookUrl: agents.webhookUrl, webhookSecret: agents.webhookSecret }).from(agents).where(eq(agents.id, agentId)).limit(1);
   if (!agent?.webhookUrl?.trim() || !agent.webhookSecret) return;
 
-  // H1: validate webhook URL before delivery (SSRF prevention)
+  // SSRF guard: validate webhook URL before delivering
   try {
-    await validateWebhookUrl(agent.webhookUrl);
+    await validateOutboundUrl(agent.webhookUrl);
   } catch (err) {
-    console.warn('[webhooks] Skipping delivery — invalid webhook URL for agent %s: %s', agentId, (err as Error).message);
-    return;
+    if (err instanceof SsrfBlockedError) {
+      console.warn(`[webhook] SSRF blocked for agent ${agentId}: ${err.reason}`);
+      return; // Skip delivery; do not retry
+    }
+    throw err;
   }
 
   const payload = {
@@ -99,15 +100,16 @@ export async function runWebhookRetries(): Promise<void> {
   for (const row of pending) {
     const [agent] = await db.select({ webhookUrl: agents.webhookUrl, webhookSecret: agents.webhookSecret }).from(agents).where(eq(agents.id, row.agentId)).limit(1);
     if (!agent?.webhookUrl?.trim() || !agent.webhookSecret) continue;
-
-    // H1: validate webhook URL before retry delivery (SSRF prevention)
+    // SSRF guard: validate webhook URL before retrying
     try {
-      await validateWebhookUrl(agent.webhookUrl);
+      await validateOutboundUrl(agent.webhookUrl);
     } catch (err) {
-      console.warn('[webhooks] Skipping retry — invalid webhook URL for agent %s: %s', row.agentId, (err as Error).message);
-      continue;
+      if (err instanceof SsrfBlockedError) {
+        console.warn(`[webhook retry] SSRF blocked for agent ${row.agentId}: ${err.reason}`);
+        continue; // Skip this delivery
+      }
+      throw err;
     }
-
     const payload = row.payload as Record<string, unknown>;
     const body = JSON.stringify(payload);
     const signature = signPayload(body, agent.webhookSecret);

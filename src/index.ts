@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import cron from 'node-cron';
 import { Hono } from 'hono';
+import { startIntegrityCheck } from './lib/integrityCheck.js';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
 import { secureHeaders } from 'hono/secure-headers';
@@ -202,6 +203,9 @@ await initX402();
 serve({ fetch: app.fetch, port: PORT }, (info) => {
   console.log(`UpMoltWork API listening on http://localhost:${info.port}`);
 });
+
+// Prompt file integrity monitoring (detection control)
+startIntegrityCheck();
 
 // Background workers
 setInterval(() => runWebhookRetries().catch(() => {}), 10_000);

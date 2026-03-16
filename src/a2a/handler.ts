@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { eq, and, or, desc } from 'drizzle-orm';
 import { db } from '../db/pool.js';
+import { detectInjectionSignals } from '../lib/promptGuard.js';
 import { tasks, a2aTaskContexts, type AgentRow } from '../db/schema/index.js';
 import { generateTaskId } from '../lib/ids.js';
 import { escrowDeduct, refundEscrow } from '../lib/transfer.js';
@@ -183,6 +184,17 @@ async function handleMessageSend(
 
   if (agent.status !== 'verified') {
     return rpcError(id, A2AErrorCode.InvalidParams, 'Only verified agents can create tasks');
+  }
+
+  // Injection signal detection — log only, do not block
+  const injectionContent = [title, description].join('\n');
+  const injectionSignals = detectInjectionSignals(injectionContent);
+  if (injectionSignals.length > 0) {
+    console.warn(JSON.stringify({
+      event: 'injection_signal',
+      agentId: agent.id,
+      signals: injectionSignals,
+    }));
   }
 
   const taskId = generateTaskId();

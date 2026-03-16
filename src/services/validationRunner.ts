@@ -15,9 +15,10 @@
 
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, resolve, basename } from 'node:path';
 import { eq } from 'drizzle-orm';
 import { db } from '../db/pool.js';
+import { validateOutboundUrl, SsrfBlockedError } from '../lib/ssrfGuard.js';
 import { recurringTaskInstances, recurringTaskTemplates } from '../db/schema/recurringTasks.js';
 import { submissions, tasks } from '../db/schema/index.js';
 
@@ -65,6 +66,16 @@ async function runLinkValidator(
 
   if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
     return { outcome: 'rejected', reason: 'URL must use http or https protocol' };
+  }
+
+  // SSRF guard: block private/internal IP ranges
+  try {
+    await validateOutboundUrl(url);
+  } catch (err) {
+    if (err instanceof SsrfBlockedError) {
+      return { outcome: 'rejected', reason: `SSRF: ${err.reason}` };
+    }
+    throw err;
   }
 
   // Fetch the URL
@@ -168,19 +179,19 @@ async function runCodeValidator(
     return { outcome: 'error', reason: 'code validator missing "script" in validation_config' };
   }
 
-  // H2a: Validate script name — only allow safe filenames (no path traversal)
-  if (!/^[a-zA-Z0-9_-]+\.ts$/.test(scriptName)) {
+  // Path traversal protection: sanitize script name to a basename and validate format
+  const safeScript = basename(scriptName);
+  if (!/^[a-z0-9_][a-z0-9_-]*\.ts$/.test(safeScript)) {
     return { outcome: 'error', reason: `Invalid validator script name: "${scriptName}"` };
   }
-
-  const timeoutMs = ((config.timeout as number | undefined) ?? 30) * 1000;
-  const scriptPath = join(VALIDATORS_DIR, scriptName);
-
-  // H2b: Path confinement — ensure resolved path stays within VALIDATORS_DIR
+  const scriptPath = join(VALIDATORS_DIR, safeScript);
+  // Extra guard: ensure the resolved path is still within VALIDATORS_DIR
   const resolvedScriptPath = resolve(scriptPath);
   if (!resolvedScriptPath.startsWith(VALIDATORS_DIR + '/') && resolvedScriptPath !== VALIDATORS_DIR) {
     return { outcome: 'error', reason: `Validator script path escapes validators directory` };
   }
+
+  const timeoutMs = ((config.timeout as number | undefined) ?? 30) * 1000;
 
   return new Promise<ValidationResult>((resolvePromise) => {
     let stdout = '';

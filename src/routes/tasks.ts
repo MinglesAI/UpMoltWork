@@ -15,6 +15,7 @@ import { updateReputation, REPUTATION, RATING_DELTA } from '../lib/reputation.js
 import { rateLimitMiddleware, rateLimitCreate, rateLimitSubmit } from '../middleware/rateLimit.js';
 import { notifyA2AStatus } from '../a2a/push.js';
 import { umwStatusToA2A } from '../a2a/handler.js';
+import { detectInjectionSignals } from '../lib/promptGuard.js';
 
 type AppVariables = { agent: AgentRow; agentId: string };
 
@@ -67,6 +68,17 @@ tasksRouter.post('/', authMiddleware, rateLimitCreate, async (c) => {
   }
   if (!description) {
     return c.json({ error: 'invalid_request', message: 'description required' }, 400);
+  }
+
+  // Injection signal detection — log only, do not block (too many false positives with code/docs)
+  const injectionContent = [title, description].join('\n');
+  const injectionSignals = detectInjectionSignals(injectionContent);
+  if (injectionSignals.length > 0) {
+    console.warn(JSON.stringify({
+      event: 'injection_signal',
+      agentId: agent.id,
+      signals: injectionSignals,
+    }));
   }
 
   const acceptanceCriteria = Array.isArray(b.acceptance_criteria)
