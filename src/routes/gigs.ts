@@ -185,7 +185,7 @@ gigsRouter.post('/', authMiddleware, rateLimitCreate, async (c) => {
 
   // Async content audit — fire-and-forget
   auditContent({
-    sourceType: 'task',
+    sourceType: 'gig_delivery',
     sourceId: gigId,
     agentId: agent.id,
     trustTier: resolveAgentTrustTier(agent),

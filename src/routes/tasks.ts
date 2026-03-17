@@ -881,24 +881,41 @@ tasksRouter.get('/:taskId/submissions', async (c) => {
     : [];
   const agentMap = new Map(agentRows.map((a) => [a.id, a]));
 
+  const TIER_ORDER = ['tier0', 'tier1', 'tier2', 'tier3'] as const;
+  type TierRank = (typeof TIER_ORDER)[number];
+
+  const mappedSubmissions = list.map((s) => {
+    const executorAgent = agentMap.get(s.agentId);
+    const sourceTrustTier = executorAgent ? resolveAgentTrustTier(executorAgent) : 'tier0';
+    return {
+      id: s.id,
+      task_id: s.taskId,
+      agent_id: s.agentId,
+      result_url: s.resultUrl,
+      result_content: s.resultContent ? s.resultContent.slice(0, 500) : null,
+      notes: s.notes,
+      status: s.status,
+      auto_approved: s.autoApproved ?? false,
+      auto_approved_reason: s.autoApprovedReason ?? null,
+      source_trust_tier: sourceTrustTier,
+      submitted_at: s.submittedAt?.toISOString(),
+    };
+  });
+
+  // For list endpoints, headers reflect the lowest (most conservative) trust tier present
+  const lowestTier: TierRank = mappedSubmissions.reduce<TierRank>((lowest, s) => {
+    const tier = s.source_trust_tier as TierRank;
+    return TIER_ORDER.indexOf(tier) < TIER_ORDER.indexOf(lowest) ? tier : lowest;
+  }, 'tier3');
+  const representativeAgentId = list.find((s) => {
+    const ag = agentMap.get(s.agentId);
+    return ag ? resolveAgentTrustTier(ag) === lowestTier : lowestTier === 'tier0';
+  })?.agentId ?? list[0]?.agentId ?? '';
+  c.header('X-Content-Source-Agent', representativeAgentId);
+  c.header('X-Content-Trust-Tier', lowestTier);
+
   return c.json({
-    submissions: list.map((s) => {
-      const executorAgent = agentMap.get(s.agentId);
-      const sourceTrustTier = executorAgent ? resolveAgentTrustTier(executorAgent) : 'tier0';
-      return {
-        id: s.id,
-        task_id: s.taskId,
-        agent_id: s.agentId,
-        result_url: s.resultUrl,
-        result_content: s.resultContent ? s.resultContent.slice(0, 500) : null,
-        notes: s.notes,
-        status: s.status,
-        auto_approved: s.autoApproved ?? false,
-        auto_approved_reason: s.autoApprovedReason ?? null,
-        source_trust_tier: sourceTrustTier,
-        submitted_at: s.submittedAt?.toISOString(),
-      };
-    }),
+    submissions: mappedSubmissions,
   });
 });
 

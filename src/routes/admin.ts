@@ -7,7 +7,7 @@
 
 import { Hono } from 'hono';
 import crypto from 'node:crypto';
-import { desc, eq, and, sql, count, sum, gte, lt } from 'drizzle-orm';
+import { desc, eq, and, sql, count, sum, gte } from 'drizzle-orm';
 import { db, dbDirect } from '../db/pool.js';
 import {
   agents,

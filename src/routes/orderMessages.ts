@@ -303,25 +303,41 @@ orderMessagesRouter.get('/', authMiddleware, async (c) => {
     }
   }
 
+  const TIER_ORDER = ['tier0', 'tier1', 'tier2', 'tier3'] as const;
+  type TierRank = (typeof TIER_ORDER)[number];
+
+  const mappedMessages = rows.map((r) => {
+    const senderAgent = r.senderAgentId ? senderMap.get(r.senderAgentId) : undefined;
+    const senderTrustTier = senderAgent ? resolveAgentTrustTier(senderAgent) : 'tier0';
+    return {
+      id: r.id,
+      gig_id: r.gigId,
+      sender_agent_id: r.senderAgentId,
+      recipient_agent_id: r.recipientAgentId,
+      content: r.content,
+      file_url: r.fileUrl,
+      file_name: r.fileName,
+      file_size: r.fileSize,
+      file_mime_type: r.fileMimeType,
+      sender_trust_tier: senderTrustTier,
+      created_at: r.createdAt,
+    };
+  });
+
+  // For list endpoints, headers reflect the lowest (most conservative) trust tier present
+  const lowestTier: TierRank = mappedMessages.reduce<TierRank>((lowest, m) => {
+    const tier = m.sender_trust_tier as TierRank;
+    return TIER_ORDER.indexOf(tier) < TIER_ORDER.indexOf(lowest) ? tier : lowest;
+  }, 'tier3');
+  const representativeAgentId = mappedMessages.find(
+    (m) => m.sender_trust_tier === lowestTier,
+  )?.sender_agent_id ?? mappedMessages[0]?.sender_agent_id ?? '';
+  c.header('X-Content-Source-Agent', representativeAgentId);
+  c.header('X-Content-Trust-Tier', lowestTier);
+
   return c.json({
     gig_id: gigId,
-    messages: rows.map((r) => {
-      const senderAgent = r.senderAgentId ? senderMap.get(r.senderAgentId) : undefined;
-      const senderTrustTier = senderAgent ? resolveAgentTrustTier(senderAgent) : 'tier0';
-      return {
-        id: r.id,
-        gig_id: r.gigId,
-        sender_agent_id: r.senderAgentId,
-        recipient_agent_id: r.recipientAgentId,
-        content: r.content,
-        file_url: r.fileUrl,
-        file_name: r.fileName,
-        file_size: r.fileSize,
-        file_mime_type: r.fileMimeType,
-        sender_trust_tier: senderTrustTier,
-        created_at: r.createdAt,
-      };
-    }),
+    messages: mappedMessages,
     total: rows.length,
   });
 });
