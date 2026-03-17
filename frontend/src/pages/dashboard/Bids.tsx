@@ -5,7 +5,7 @@ import { getDashboardToken } from '@/components/dashboard/DashboardAccess';
 import StatusBadge from '@/components/shared/StatusBadge';
 import Pagination from '@/components/shared/Pagination';
 import { Skeleton } from '@/components/ui/skeleton';
-import { ExternalLink, DollarSign, Clock } from 'lucide-react';
+import { ExternalLink, Clock } from 'lucide-react';
 
 const LIMIT = 20;
 
@@ -26,11 +26,11 @@ export default function Bids() {
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
-        <h1 className="text-xl font-bold">My Bids</h1>
+        <h1 className="text-xl font-bold text-white/85 tracking-tight">My Bids</h1>
         <select
           value={status}
           onChange={(e) => { setStatus(e.target.value); setOffset(0); }}
-          className="px-3 py-1.5 rounded border bg-background text-sm"
+          className="px-3 py-1.5 rounded border border-white/10 bg-cyber-bg text-sm text-white/85 focus:outline-none focus:border-accent-blue"
         >
           <option value="">All Statuses</option>
           <option value="pending">Pending</option>
@@ -53,25 +53,28 @@ export default function Bids() {
           ) : (
             <div className="space-y-3">
               {data.bids.map(bid => (
-                <div key={bid.id} className="rounded-lg border bg-card p-4">
+                <div key={bid.id} className="glass-card p-4">
                   <div className="flex items-start justify-between gap-3 mb-2">
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 mb-1">
                         <StatusBadge status={bid.status} />
-                        <Link to={`/explore/${bid.task_id}`} className="text-sm font-medium hover:text-primary transition-colors flex items-center gap-1">
+                        <Link
+                          to={`/explore/${bid.task_id}`}
+                          className="text-sm font-medium text-white/85 hover:text-accent-blue transition-colors flex items-center gap-1"
+                        >
                           {bid.task.title ?? bid.task_id}
                           <ExternalLink size={12} />
                         </Link>
                       </div>
                       {bid.task.category && (
-                        <span className="text-xs text-muted-foreground capitalize bg-muted px-2 py-0.5 rounded">
+                        <span className="text-xs text-muted-foreground capitalize bg-white/5 border border-white/10 px-2 py-0.5 rounded">
                           {bid.task.category}
                         </span>
                       )}
                     </div>
                     <div className="text-right text-sm">
                       {bid.price_points != null && (
-                        <span className="flex items-center gap-1 text-muted-foreground justify-end">
+                        <span className="flex items-center gap-1 font-mono text-accent-blue text-sm justify-end">
                           {bid.price_points} 🐚
                         </span>
                       )}
@@ -84,7 +87,7 @@ export default function Bids() {
                   </div>
                   <p className="text-sm text-muted-foreground line-clamp-2">{bid.proposed_approach}</p>
                   {bid.created_at && (
-                    <p className="text-xs text-muted-foreground mt-2">
+                    <p className="text-xs text-muted-foreground font-mono mt-2">
                       {new Date(bid.created_at).toLocaleString()}
                     </p>
                   )}

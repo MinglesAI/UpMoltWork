@@ -27,11 +27,11 @@ export default function Transactions() {
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
-        <h1 className="text-xl font-bold">Transactions</h1>
+        <h1 className="text-xl font-bold text-white/85 tracking-tight">Transactions</h1>
         <select
           value={type}
           onChange={(e) => { setType(e.target.value); setOffset(0); }}
-          className="px-3 py-1.5 rounded border bg-background text-sm"
+          className="px-3 py-1.5 rounded border border-white/10 bg-cyber-bg text-sm text-white/85 focus:outline-none focus:border-accent-blue"
         >
           {TX_TYPES.map(t => (
             <option key={t} value={t}>{t === '' ? 'All Types' : t.replace(/_/g, ' ')}</option>
@@ -50,42 +50,42 @@ export default function Transactions() {
           {data.transactions.length === 0 ? (
             <p className="text-muted-foreground text-sm py-8 text-center">No transactions found.</p>
           ) : (
-            <div className="border rounded-lg overflow-hidden">
+            <div className="glass-card overflow-hidden">
               <table className="w-full text-sm">
-                <thead className="bg-muted">
-                  <tr>
-                    <th className="text-left p-3 font-medium text-muted-foreground">Date</th>
-                    <th className="text-left p-3 font-medium text-muted-foreground">Type</th>
-                    <th className="text-left p-3 font-medium text-muted-foreground">Amount</th>
-                    <th className="text-left p-3 font-medium text-muted-foreground hidden sm:table-cell">From / To</th>
-                    <th className="text-left p-3 font-medium text-muted-foreground hidden md:table-cell">Memo</th>
+                <thead>
+                  <tr className="border-b border-white/5">
+                    <th className="text-left p-3 text-muted-foreground text-xs uppercase tracking-wider font-medium">Date</th>
+                    <th className="text-left p-3 text-muted-foreground text-xs uppercase tracking-wider font-medium">Type</th>
+                    <th className="text-left p-3 text-muted-foreground text-xs uppercase tracking-wider font-medium">Amount</th>
+                    <th className="text-left p-3 text-muted-foreground text-xs uppercase tracking-wider font-medium hidden sm:table-cell">From / To</th>
+                    <th className="text-left p-3 text-muted-foreground text-xs uppercase tracking-wider font-medium hidden md:table-cell">Memo</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y">
+                <tbody className="divide-y divide-white/5">
                   {data.transactions.map(tx => {
                     const isIncoming = tx.to_agent_id === agentId;
                     return (
-                      <tr key={tx.id} className="hover:bg-muted/50 transition-colors">
-                        <td className="p-3 text-muted-foreground">
+                      <tr key={tx.id} className="hover:bg-white/3 transition-colors">
+                        <td className="p-3 text-muted-foreground font-mono text-xs">
                           {tx.created_at ? new Date(tx.created_at).toLocaleDateString() : '—'}
                         </td>
                         <td className="p-3">
-                          <span className="bg-muted px-2 py-0.5 rounded text-xs capitalize">
+                          <span className="bg-white/5 border border-white/10 px-2 py-0.5 rounded text-xs capitalize text-muted-foreground">
                             {tx.type.replace(/_/g, ' ')}
                           </span>
                         </td>
                         <td className="p-3">
-                          <span className={`flex items-center gap-1 font-medium ${isIncoming ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                          <span className={`flex items-center gap-1 font-mono font-medium text-sm ${isIncoming ? 'text-green-400' : 'text-red-400'}`}>
                             {isIncoming ? <ArrowDownLeft size={13} /> : <ArrowUpRight size={13} />}
                             {isIncoming ? '+' : '-'}{tx.amount} {tx.currency}
                           </span>
                         </td>
-                        <td className="p-3 text-muted-foreground text-xs hidden sm:table-cell">
+                        <td className="p-3 text-muted-foreground font-mono text-xs hidden sm:table-cell">
                           {isIncoming
                             ? `from ${tx.from_agent_id ?? 'system'}`
                             : `to ${tx.to_agent_id}`}
                         </td>
-                        <td className="p-3 text-muted-foreground hidden md:table-cell max-w-xs truncate">
+                        <td className="p-3 text-muted-foreground hidden md:table-cell max-w-xs truncate text-xs">
                           {tx.memo ?? tx.task_id ?? '—'}
                         </td>
                       </tr>

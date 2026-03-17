@@ -11,12 +11,14 @@ import type { Task } from '@/api/queries';
 
 function TransactionRow({ tx }: { tx: Transaction }) {
   return (
-    <div className="flex items-center gap-3 py-2.5 border-b last:border-0 text-sm">
-      <span className="bg-muted px-2 py-0.5 rounded text-xs capitalize">{tx.type.replace(/_/g, ' ')}</span>
-      <span className={`font-medium ${tx.to_agent_id ? 'text-green-600 dark:text-green-400' : ''}`}>
+    <div className="flex items-center gap-3 py-2.5 border-b border-white/5 last:border-0 text-sm">
+      <span className="bg-white/5 border border-white/10 px-2 py-0.5 rounded text-xs capitalize text-muted-foreground">
+        {tx.type.replace(/_/g, ' ')}
+      </span>
+      <span className={`font-mono font-medium text-sm ${tx.to_agent_id ? 'text-green-400' : 'text-muted-foreground'}`}>
         {tx.amount > 0 ? '+' : ''}{tx.amount} {tx.currency}
       </span>
-      {tx.memo && <span className="text-muted-foreground truncate">{tx.memo}</span>}
+      {tx.memo && <span className="text-muted-foreground truncate text-xs">{tx.memo}</span>}
       {tx.created_at && (
         <span className="ml-auto text-xs text-muted-foreground">{new Date(tx.created_at).toLocaleDateString()}</span>
       )}
@@ -53,44 +55,44 @@ export default function Overview() {
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-3">
-        <h1 className="text-xl font-bold">{agent.name}</h1>
+        <h1 className="text-xl font-bold text-white/85 tracking-tight">{agent.name}</h1>
         <StatusBadge status={agent.status} />
         <ReputationBadge score={agent.reputation_score} className="ml-2" />
       </div>
 
       {/* Balance + stats */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <div className="rounded-lg border bg-card p-4">
-          <div className="flex items-center gap-2 text-muted-foreground text-sm mb-2">
-            <Coins size={15} /> Shells 🐚 Balance
+        <div className="glass-card p-4">
+          <div className="flex items-center gap-2 text-muted-foreground text-xs uppercase tracking-wider mb-3">
+            <Coins size={14} /> Shells 🐚 Balance
           </div>
-          <p className="text-2xl font-bold">{agent.balance_points.toFixed(2)}</p>
+          <p className="text-2xl font-bold text-white/85">{agent.balance_points.toFixed(2)}</p>
         </div>
-        <div className="rounded-lg border bg-card p-4">
-          <div className="flex items-center gap-2 text-muted-foreground text-sm mb-2">
-            <Coins size={15} /> USDC Balance
+        <div className="glass-card p-4">
+          <div className="flex items-center gap-2 text-muted-foreground text-xs uppercase tracking-wider mb-3">
+            <Coins size={14} /> USDC Balance
           </div>
-          <p className="text-2xl font-bold">{agent.balance_usdc.toFixed(2)}</p>
+          <p className="text-2xl font-bold text-white/85">{agent.balance_usdc.toFixed(2)}</p>
         </div>
-        <div className="rounded-lg border bg-card p-4">
-          <div className="flex items-center gap-2 text-muted-foreground text-sm mb-2">
-            <CheckCircle size={15} /> Tasks Completed
+        <div className="glass-card p-4">
+          <div className="flex items-center gap-2 text-muted-foreground text-xs uppercase tracking-wider mb-3">
+            <CheckCircle size={14} /> Tasks Completed
           </div>
-          <p className="text-2xl font-bold">{agent.tasks_completed}</p>
+          <p className="text-2xl font-bold text-white/85">{agent.tasks_completed}</p>
         </div>
-        <div className="rounded-lg border bg-card p-4">
-          <div className="flex items-center gap-2 text-muted-foreground text-sm mb-2">
-            <TrendingUp size={15} /> Success Rate
+        <div className="glass-card p-4">
+          <div className="flex items-center gap-2 text-muted-foreground text-xs uppercase tracking-wider mb-3">
+            <TrendingUp size={14} /> Success Rate
           </div>
-          <p className="text-2xl font-bold">{parseFloat(String(agent.success_rate ?? 0)).toFixed(0)}%</p>
+          <p className="text-2xl font-bold text-white/85">{parseFloat(String(agent.success_rate ?? 0)).toFixed(0)}%</p>
         </div>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-2">
         {/* Recent tasks */}
-        <div className="rounded-lg border bg-card p-5">
-          <h2 className="font-semibold mb-3 flex items-center gap-2">
-            <ListTodo size={15} /> Recent Tasks
+        <div className="glass-card p-5">
+          <h2 className="font-bold text-white/85 tracking-tight mb-4 flex items-center gap-2">
+            <ListTodo size={15} className="text-accent-blue" /> Recent Tasks
           </h2>
           {recent_tasks.length === 0 ? (
             <p className="text-sm text-muted-foreground">No tasks yet.</p>
@@ -102,9 +104,9 @@ export default function Overview() {
         </div>
 
         {/* Recent transactions */}
-        <div className="rounded-lg border bg-card p-5">
-          <h2 className="font-semibold mb-3 flex items-center gap-2">
-            <Coins size={15} /> Recent Transactions
+        <div className="glass-card p-5">
+          <h2 className="font-bold text-white/85 tracking-tight mb-4 flex items-center gap-2">
+            <Coins size={15} className="text-accent-blue" /> Recent Transactions
           </h2>
           {recent_transactions.length === 0 ? (
             <p className="text-sm text-muted-foreground">No transactions yet.</p>

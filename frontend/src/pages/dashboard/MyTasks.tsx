@@ -26,14 +26,14 @@ function TaskPrice({ task }: { task: { payment_mode?: string | null; price_point
     const label = isMainnet ? `$${price_usdc} USDC` : `$${price_usdc} USDC${isSepolia ? ' (testnet)' : ''}`;
     return (
       <span className="flex items-center gap-1">
-        <span className="text-blue-600 dark:text-blue-400 font-medium">{label}</span>
+        <span className="font-mono text-accent-blue text-sm font-medium">{label}</span>
         {explorerUrl && (
           <a
             href={explorerUrl}
             target="_blank"
             rel="noopener noreferrer"
             onClick={(e) => e.stopPropagation()}
-            className="text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-200"
+            className="text-accent-blue hover:text-white/85 transition-colors"
             title={isMainnet ? 'View on BaseScan' : 'View on BaseScan Sepolia'}
           >
             <ExternalLink size={12} />
@@ -43,7 +43,7 @@ function TaskPrice({ task }: { task: { payment_mode?: string | null; price_point
     );
   }
   if (price_points != null) {
-    return <span className="flex items-center gap-1">{price_points} 🐚</span>;
+    return <span className="flex items-center gap-1 font-mono text-accent-blue text-sm">{price_points} 🐚</span>;
   }
   return <span className="text-muted-foreground">—</span>;
 }
@@ -69,18 +69,18 @@ export default function MyTasks() {
 
   return (
     <div>
-      <h1 className="text-xl font-bold mb-4">My Tasks</h1>
+      <h1 className="text-xl font-bold text-white/85 tracking-tight mb-4">My Tasks</h1>
 
       {/* Tabs */}
-      <div className="flex gap-1 mb-5 border-b">
+      <div className="flex gap-1 mb-5 border-b border-white/5">
         {tabs.map(t => (
           <button
             key={t.value}
             onClick={() => { setRole(t.value); setOffset(0); }}
             className={`px-4 py-2 text-sm font-medium transition-colors border-b-2 -mb-px ${
               role === t.value
-                ? 'border-primary text-foreground'
-                : 'border-transparent text-muted-foreground hover:text-foreground'
+                ? 'border-accent-blue text-accent-blue'
+                : 'border-transparent text-muted-foreground hover:text-white/85'
             }`}
           >
             {t.label}
@@ -99,32 +99,32 @@ export default function MyTasks() {
           {data.tasks.length === 0 ? (
             <p className="text-muted-foreground text-sm py-8 text-center">No tasks found.</p>
           ) : (
-            <div className="border rounded-lg overflow-hidden">
+            <div className="glass-card overflow-hidden">
               <table className="w-full text-sm">
-                <thead className="bg-muted">
-                  <tr>
-                    <th className="text-left p-3 font-medium text-muted-foreground">Task</th>
-                    <th className="text-left p-3 font-medium text-muted-foreground hidden sm:table-cell">Category</th>
-                    <th className="text-left p-3 font-medium text-muted-foreground">Status</th>
-                    <th className="text-left p-3 font-medium text-muted-foreground hidden md:table-cell">Price</th>
-                    <th className="text-left p-3 font-medium text-muted-foreground hidden lg:table-cell">Date</th>
+                <thead>
+                  <tr className="border-b border-white/5">
+                    <th className="text-left p-3 text-muted-foreground text-xs uppercase tracking-wider font-medium">Task</th>
+                    <th className="text-left p-3 text-muted-foreground text-xs uppercase tracking-wider font-medium hidden sm:table-cell">Category</th>
+                    <th className="text-left p-3 text-muted-foreground text-xs uppercase tracking-wider font-medium">Status</th>
+                    <th className="text-left p-3 text-muted-foreground text-xs uppercase tracking-wider font-medium hidden md:table-cell">Price</th>
+                    <th className="text-left p-3 text-muted-foreground text-xs uppercase tracking-wider font-medium hidden lg:table-cell">Date</th>
                     <th className="p-3"></th>
                   </tr>
                 </thead>
-                <tbody className="divide-y">
+                <tbody className="divide-y divide-white/5">
                   {data.tasks.map(t => (
-                    <tr key={t.id} className="hover:bg-muted/50 transition-colors">
-                      <td className="p-3 font-medium max-w-xs truncate">{t.title}</td>
+                    <tr key={t.id} className="hover:bg-white/3 transition-colors">
+                      <td className="p-3 font-medium text-white/85 max-w-xs truncate">{t.title}</td>
                       <td className="p-3 text-muted-foreground capitalize hidden sm:table-cell">{t.category}</td>
                       <td className="p-3"><StatusBadge status={t.status} /></td>
-                      <td className="p-3 text-muted-foreground hidden md:table-cell">
+                      <td className="p-3 hidden md:table-cell">
                         <TaskPrice task={t} />
                       </td>
-                      <td className="p-3 text-muted-foreground hidden lg:table-cell">
+                      <td className="p-3 text-muted-foreground hidden lg:table-cell font-mono text-xs">
                         {t.created_at ? new Date(t.created_at).toLocaleDateString() : '—'}
                       </td>
                       <td className="p-3">
-                        <Link to={`/explore/${t.id}`} className="text-primary hover:text-primary/80">
+                        <Link to={`/explore/${t.id}`} className="text-accent-blue hover:text-white/85 transition-colors">
                           <ExternalLink size={14} />
                         </Link>
                       </td>
