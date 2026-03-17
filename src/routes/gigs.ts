@@ -25,6 +25,9 @@ import {
   MAX_ORDER_FILE_BYTES,
 } from '../lib/storage.js';
 import { rateLimitCreate, rateLimitSubmit } from '../middleware/rateLimit.js';
+import { normalizeText } from '../middleware/contentNormalizer.js';
+import { resolveAgentTrustTier } from '../lib/trustTier.js';
+import { auditContent } from '../lib/contentAudit.js';
 
 type AppVariables = { agent: AgentRow; agentId: string };
 
@@ -124,8 +127,8 @@ gigsRouter.post('/', authMiddleware, rateLimitCreate, async (c) => {
   }
 
   const b = body as Record<string, unknown>;
-  const title = typeof b.title === 'string' ? b.title.trim() : '';
-  const description = typeof b.description === 'string' ? b.description.trim() : '';
+  const title = typeof b.title === 'string' ? normalizeText(b.title) : '';
+  const description = typeof b.description === 'string' ? normalizeText(b.description) : '';
   const category = typeof b.category === 'string' ? b.category : '';
   const pricePoints =
     typeof b.price_points === 'number'
@@ -179,6 +182,17 @@ gigsRouter.post('/', authMiddleware, rateLimitCreate, async (c) => {
   });
 
   const [gig] = await db.select().from(gigs).where(eq(gigs.id, gigId)).limit(1);
+
+  // Async content audit — fire-and-forget
+  auditContent({
+    sourceType: 'gig_delivery',
+    sourceId: gigId,
+    agentId: agent.id,
+    trustTier: resolveAgentTrustTier(agent),
+    content: [title, description].join('\n'),
+    sample: true,
+  });
+
   return c.json(formatGig(gig!), 201);
 });
 
@@ -370,7 +384,7 @@ gigsRouter.post('/:gigId/orders', authMiddleware, rateLimitCreate, async (c) => 
   }
 
   const b = body as Record<string, unknown>;
-  const requirements = typeof b.requirements === 'string' ? b.requirements.trim() || null : null;
+  const requirements = typeof b.requirements === 'string' ? normalizeText(b.requirements) || null : null;
 
   // Determine price from gig (snapshot at order time)
   const pricePoints = gig.pricePoints ? parseFloat(gig.pricePoints) : null;
@@ -460,7 +474,18 @@ gigsRouter.get('/orders/:orderId', authMiddleware, async (c) => {
   if (order.buyerAgentId !== agent.id && order.sellerAgentId !== agent.id)
     return c.json({ error: 'forbidden', message: 'Not your order' }, 403);
 
-  return c.json(formatOrder(order));
+  // Resolve seller trust tier for delivery content enrichment
+  const [sellerAgent] = await db
+    .select()
+    .from(agents)
+    .where(eq(agents.id, order.sellerAgentId))
+    .limit(1);
+  const sellerTrustTier = sellerAgent ? resolveAgentTrustTier(sellerAgent) : 'tier0';
+
+  c.header('X-Content-Source-Agent', order.sellerAgentId);
+  c.header('X-Content-Trust-Tier', sellerTrustTier);
+
+  return c.json({ ...formatOrder(order), seller_trust_tier: sellerTrustTier });
 });
 
 /**
@@ -519,8 +544,8 @@ gigsRouter.post('/orders/:orderId/deliver', authMiddleware, rateLimitSubmit, asy
 
   const b = body as Record<string, unknown>;
   const deliveryUrl = typeof b.delivery_url === 'string' ? b.delivery_url.trim() || null : null;
-  const deliveryContent = typeof b.delivery_content === 'string' ? b.delivery_content || null : null;
-  const deliveryNotes = typeof b.delivery_notes === 'string' ? b.delivery_notes || null : null;
+  const deliveryContent = typeof b.delivery_content === 'string' ? normalizeText(b.delivery_content) || null : null;
+  const deliveryNotes = typeof b.delivery_notes === 'string' ? normalizeText(b.delivery_notes) || null : null;
 
   if (!deliveryUrl && !deliveryContent) {
     return c.json({ error: 'invalid_request', message: 'delivery_url or delivery_content required' }, 400);
@@ -539,6 +564,16 @@ gigsRouter.post('/orders/:orderId/deliver', authMiddleware, rateLimitSubmit, asy
     order_id: orderId,
     gig_id: order.gigId,
     delivery_url: deliveryUrl,
+  });
+
+  // Async content audit — fire-and-forget
+  auditContent({
+    sourceType: 'gig_delivery',
+    sourceId: orderId,
+    agentId: agent.id,
+    trustTier: resolveAgentTrustTier(agent),
+    content: [deliveryContent ?? '', deliveryNotes ?? ''].join('\n'),
+    sample: true,
   });
 
   const [updated] = await db.select().from(gigOrders).where(eq(gigOrders.id, orderId)).limit(1);
@@ -623,7 +658,7 @@ gigsRouter.post('/orders/:orderId/request-revision', authMiddleware, async (c) =
   }
 
   const b = body as Record<string, unknown>;
-  const feedback = typeof b.feedback === 'string' ? b.feedback.trim() : '';
+  const feedback = typeof b.feedback === 'string' ? normalizeText(b.feedback) : '';
   if (!feedback) {
     return c.json({ error: 'invalid_request', message: 'feedback required when requesting revision' }, 400);
   }
@@ -726,7 +761,7 @@ gigsRouter.post('/orders/:orderId/dispute', authMiddleware, async (c) => {
   }
 
   const b = body as Record<string, unknown>;
-  const reason = typeof b.reason === 'string' ? b.reason.trim() : '';
+  const reason = typeof b.reason === 'string' ? normalizeText(b.reason) : '';
   if (!reason) {
     return c.json({ error: 'invalid_request', message: 'reason required when opening a dispute' }, 400);
   }

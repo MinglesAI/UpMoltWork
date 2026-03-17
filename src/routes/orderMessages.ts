@@ -1,10 +1,14 @@
 import { Hono } from 'hono';
-import { eq, and, asc, ne } from 'drizzle-orm';
+import { eq, and, asc, ne, inArray } from 'drizzle-orm';
 import { db } from '../db/pool.js';
-import { gigs, orderMessages, gigOrders } from '../db/schema/index.js';
+import { gigs, orderMessages, gigOrders, agents } from '../db/schema/index.js';
+import type { AgentRow } from '../db/schema/index.js';
 import { authMiddleware } from '../auth.js';
 import { generateOrderMessageId } from '../lib/ids.js';
 import { uploadMessageFile, formatFileSize } from '../lib/storage.js';
+import { normalizeText } from '../middleware/contentNormalizer.js';
+import { resolveAgentTrustTier } from '../lib/trustTier.js';
+import { auditContent } from '../lib/contentAudit.js';
 
 const orderMessagesRouter = new Hono();
 
@@ -113,7 +117,7 @@ orderMessagesRouter.post('/', authMiddleware, async (c) => {
 
     const rawContent = formData.get('content');
     if (typeof rawContent === 'string') {
-      content = rawContent.trim() || null;
+      content = normalizeText(rawContent) || null;
     }
 
     const file = formData.get('file');
@@ -155,7 +159,7 @@ orderMessagesRouter.post('/', authMiddleware, async (c) => {
     }
     const rawContent = body.content;
     if (typeof rawContent === 'string') {
-      content = rawContent.trim() || null;
+      content = normalizeText(rawContent) || null;
     }
   }
 
@@ -212,6 +216,18 @@ orderMessagesRouter.post('/', authMiddleware, async (c) => {
     fileSize,
     fileMimeType,
   });
+
+  // Async content audit — fire-and-forget
+  if (content) {
+    auditContent({
+      sourceType: 'message',
+      sourceId: messageId,
+      agentId: agent.id,
+      trustTier: resolveAgentTrustTier(agent as AgentRow),
+      content,
+      sample: true,
+    });
+  }
 
   return c.json(
     {
@@ -274,9 +290,26 @@ orderMessagesRouter.get('/', authMiddleware, async (c) => {
     .orderBy(asc(orderMessages.createdAt))
     .limit(limit);
 
-  return c.json({
-    gig_id: gigId,
-    messages: rows.map((r) => ({
+  // Resolve trust tiers for all unique senders (one DB lookup for all unique agents)
+  const uniqueSenderIds = [...new Set(rows.map((r) => r.senderAgentId).filter(Boolean) as string[])];
+  const senderMap = new Map<string, AgentRow>();
+  if (uniqueSenderIds.length > 0) {
+    const senderAgentRows = await db
+      .select()
+      .from(agents)
+      .where(inArray(agents.id, uniqueSenderIds));
+    for (const a of senderAgentRows) {
+      senderMap.set(a.id, a);
+    }
+  }
+
+  const TIER_ORDER = ['tier0', 'tier1', 'tier2', 'tier3'] as const;
+  type TierRank = (typeof TIER_ORDER)[number];
+
+  const mappedMessages = rows.map((r) => {
+    const senderAgent = r.senderAgentId ? senderMap.get(r.senderAgentId) : undefined;
+    const senderTrustTier = senderAgent ? resolveAgentTrustTier(senderAgent) : 'tier0';
+    return {
       id: r.id,
       gig_id: r.gigId,
       sender_agent_id: r.senderAgentId,
@@ -286,8 +319,25 @@ orderMessagesRouter.get('/', authMiddleware, async (c) => {
       file_name: r.fileName,
       file_size: r.fileSize,
       file_mime_type: r.fileMimeType,
+      sender_trust_tier: senderTrustTier,
       created_at: r.createdAt,
-    })),
+    };
+  });
+
+  // For list endpoints, headers reflect the lowest (most conservative) trust tier present
+  const lowestTier: TierRank = mappedMessages.reduce<TierRank>((lowest, m) => {
+    const tier = m.sender_trust_tier as TierRank;
+    return TIER_ORDER.indexOf(tier) < TIER_ORDER.indexOf(lowest) ? tier : lowest;
+  }, 'tier3');
+  const representativeAgentId = mappedMessages.find(
+    (m) => m.sender_trust_tier === lowestTier,
+  )?.sender_agent_id ?? mappedMessages[0]?.sender_agent_id ?? '';
+  c.header('X-Content-Source-Agent', representativeAgentId);
+  c.header('X-Content-Trust-Tier', lowestTier);
+
+  return c.json({
+    gig_id: gigId,
+    messages: mappedMessages,
     total: rows.length,
   });
 });

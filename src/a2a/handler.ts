@@ -2,6 +2,9 @@ import { randomUUID } from 'node:crypto';
 import { eq, and, or, desc } from 'drizzle-orm';
 import { db } from '../db/pool.js';
 import { detectInjectionSignals } from '../lib/promptGuard.js';
+import { normalizeText } from '../middleware/contentNormalizer.js';
+import { resolveAgentTrustTier } from '../lib/trustTier.js';
+import { auditContent } from '../lib/contentAudit.js';
 import { tasks, a2aTaskContexts, type AgentRow } from '../db/schema/index.js';
 import { generateTaskId } from '../lib/ids.js';
 import { escrowDeduct, refundEscrow } from '../lib/transfer.js';
@@ -157,8 +160,8 @@ async function handleMessageSend(
   }
 
   const data = dataPart.data;
-  const title = typeof data.title === 'string' ? data.title.trim() : '';
-  const description = typeof data.description === 'string' ? data.description.trim() : '';
+  const title = typeof data.title === 'string' ? normalizeText(data.title) : '';
+  const description = typeof data.description === 'string' ? normalizeText(data.description) : '';
   const category = typeof data.category === 'string' ? data.category : 'development';
   const budgetPoints =
     typeof data.budget_points === 'number'
@@ -231,6 +234,16 @@ async function handleMessageSend(
       pushToken: pushConfig?.token ?? null,
     })
     .returning();
+
+  // Async content audit — fire-and-forget
+  auditContent({
+    sourceType: 'task',
+    sourceId: taskId,
+    agentId: agent.id,
+    trustTier: resolveAgentTrustTier(agent),
+    content: [title, description].join('\n'),
+    sample: true,
+  });
 
   return rpcOk(id, toA2ATask(newTask!, ctx!));
 }
