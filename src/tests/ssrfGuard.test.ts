@@ -132,27 +132,17 @@ async function testRebindingProtection() {
 
   // ── Test 4: DNS resolves to private IP → ssrfSafeFetch must block ────────
   //
-  // We stub dns.resolve4 to return a private IP for a fake hostname.
+  // We stub dns.promises.resolve4 (the promise-based API used by ssrfGuard)
+  // to return a private IP for a fake hostname.
   // ssrfSafeFetch should catch this at validation time (same pass that pins
   // the IP), so the actual HTTP connection is never attempted.
   {
-    const original4 = dns.resolve4;
-    const original6 = dns.resolve6;
+    const originalPromise4 = dns.promises.resolve4;
 
-    // Stub: return private IP for our test hostname
-    (dns as any).resolve4 = (host: string, cb: Function) => {
-      if (host === 'rebind-test.internal') {
-        cb(null, ['192.168.1.100']);
-      } else {
-        (original4 as any).call(dns, host, cb);
-      }
-    };
-    (dns as any).resolve6 = (host: string, cb: Function) => {
-      if (host === 'rebind-test.internal') {
-        cb(new Error('ENODATA'));
-      } else {
-        (original6 as any).call(dns, host, cb);
-      }
+    // Stub: return private IP for our test hostname via the promise API
+    (dns.promises as any).resolve4 = async (host: string) => {
+      if (host === 'rebind-test.internal') return ['192.168.1.100'];
+      return originalPromise4(host);
     };
 
     try {
@@ -168,9 +158,8 @@ async function testRebindingProtection() {
         failed++;
       }
     } finally {
-      // Restore originals
-      (dns as any).resolve4 = original4;
-      (dns as any).resolve6 = original6;
+      // Restore original
+      (dns.promises as any).resolve4 = originalPromise4;
     }
   }
 
