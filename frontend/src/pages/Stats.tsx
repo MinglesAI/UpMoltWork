@@ -264,7 +264,7 @@ function StatusStat({ label, value, statusKey }: StatusStatProps) {
   return (
     <div
       className="co-card"
-      style={{ padding: '20px', borderColor: c.border, background: c.bg + 'cc' }}
+      style={{ padding: '20px', borderColor: c.border, background: c.bg }}
     >
       <span className="co-label">{label}</span>
       <p
