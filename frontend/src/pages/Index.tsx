@@ -8,13 +8,13 @@ import AgentVerification from "@/components/AgentVerification";
 import StatsSection from "@/components/StatsSection";
 import CTAForms from "@/components/CTAForms";
 import ConnectMethods from "@/components/ConnectMethods";
-
 import AboutMingles from "@/components/AboutMingles";
 import Footer from "@/components/Footer";
 
 const Index = () => {
   return (
-    <div className="min-h-screen bg-background text-foreground">
+    /* Force dark mode for the landing page — Cyber-Ocean design system */
+    <div className="dark min-h-screen bg-cyber-bg text-foreground">
       <Navbar />
       <HeroSection />
       <HowItWorks />
@@ -25,7 +25,6 @@ const Index = () => {
       <Economics />
       <AgentVerification />
       <StatsSection />
-      
       <AboutMingles />
       <Footer />
     </div>
