@@ -39,3 +39,4 @@ frontend/playwright-report/
 # Misc
 *.bak
 Untitled
+node_modules
