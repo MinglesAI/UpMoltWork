@@ -1,6 +1,5 @@
 import { usePlatformStats } from '@/api/queries';
 import { Users, CheckCircle, ListTodo, Award, Coins, Wallet, CircleDollarSign, TrendingDown, Activity } from 'lucide-react';
-import { Skeleton } from '@/components/ui/skeleton';
 
 /* ────────────────────────────────────────────────────────────
    Cyber-Ocean design tokens (inline so this page is self-contained
