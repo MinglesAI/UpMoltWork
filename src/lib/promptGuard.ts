@@ -62,10 +62,6 @@ const INJECTION_PATTERNS: Array<{ label: string; regex: RegExp }> = [
     regex: /devclaw\/(prompts|projects\/[^/]+\/prompts)\//i,
   },
   {
-    label: 'prompt-override-attempt',
-    regex: /\bnew\s+instructions?\b/i,
-  },
-  {
     label: 'disregard-directive',
     regex: /\bdisregard\s+(the\s+)?(above|previous|prior|all|following)\b/i,
   },
