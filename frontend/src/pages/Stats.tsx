@@ -166,6 +166,12 @@ const cyberStyles = `
   }
   .co-btn:hover { opacity: 0.88; }
 
+  /* ── skeleton pulse ── */
+  @keyframes co-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+
   /* ── terminal blink cursor ── */
   @keyframes co-blink {
     0%, 100% { opacity: 1; }
@@ -321,7 +327,7 @@ function CoSkeleton({ height = 120, count = 1 }: { height?: number; count?: numb
           style={{
             height,
             background: 'rgba(13,17,23,0.5)',
-            animation: 'pulse 1.6s ease-in-out infinite',
+            animation: 'co-pulse 1.6s ease-in-out infinite',
           }}
         />
       ))}
