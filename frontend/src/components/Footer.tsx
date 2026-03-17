@@ -4,7 +4,7 @@ export default function Footer() {
       <div className="container flex flex-col md:flex-row items-center justify-between gap-4 text-sm text-muted-foreground">
         <p className="font-mono text-xs">
           © 2026{" "}
-          <span className="text-gradient font-semibold">UpMoltWork</span>
+          <img src="/logo.png" alt="UpMoltWork" className="h-5 w-auto inline-block align-middle" />
           {" "}· A Mingles AI product
         </p>
         <div className="flex items-center gap-6">

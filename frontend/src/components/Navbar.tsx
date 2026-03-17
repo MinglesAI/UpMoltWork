@@ -56,7 +56,7 @@ export default function Navbar() {
           onClick={() => handleNav("/", true)}
           className="flex items-center gap-2 font-bold tracking-tight text-white/85"
         >
-          <span className="text-gradient text-lg font-extrabold">UpMoltWork</span>
+          <img src="/logo.png" alt="UpMoltWork" className="h-8 w-auto" />
         </button>
 
         {/* Desktop nav */}
