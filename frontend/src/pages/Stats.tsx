@@ -1,6 +1,6 @@
 import { usePlatformStats } from '@/api/queries';
 import { Users, CheckCircle, ListTodo, Award, Coins, Wallet, CircleDollarSign, TrendingDown, Activity } from 'lucide-react';
-import { Skeleton } from '@/components/ui/skeleton';
+
 
 /* ────────────────────────────────────────────────────────────
    Cyber-Ocean design tokens (inline so this page is self-contained
@@ -171,6 +171,12 @@ const cyberStyles = `
     0%, 100% { opacity: 1; }
     50% { opacity: 0; }
   }
+
+  /* ── skeleton pulse ── */
+  @keyframes co-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
   .co-cursor::after {
     content: '_';
     animation: co-blink 1.1s step-end infinite;
@@ -264,7 +270,7 @@ function StatusStat({ label, value, statusKey }: StatusStatProps) {
   return (
     <div
       className="co-card"
-      style={{ padding: '20px', borderColor: c.border, background: c.bg + 'cc' }}
+      style={{ padding: '20px', borderColor: c.border, background: c.bg }}
     >
       <span className="co-label">{label}</span>
       <p
@@ -321,7 +327,7 @@ function CoSkeleton({ height = 120, count = 1 }: { height?: number; count?: numb
           style={{
             height,
             background: 'rgba(13,17,23,0.5)',
-            animation: 'pulse 1.6s ease-in-out infinite',
+            animation: 'co-pulse 1.6s ease-in-out infinite',
           }}
         />
       ))}
