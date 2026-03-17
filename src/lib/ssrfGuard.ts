@@ -4,11 +4,22 @@
  * Validates outbound URLs to prevent Server-Side Request Forgery.
  * Blocks requests to private IP ranges, loopback, link-local, and non-http(s) protocols.
  *
+ * DNS rebinding protection:
+ *   `ssrfSafeFetch()` resolves the hostname once, validates the IP, then passes a
+ *   custom `lookup` callback to `https.request()` that returns only the pre-validated
+ *   IP — bypassing the OS resolver at TCP-connection time.  This closes the window
+ *   exploited by DNS rebinding attacks (validate → TTL expires → fetch resolves to
+ *   private IP).
+ *
  * Usage:
- *   await validateOutboundUrl(url);  // throws SsrfBlockedError if blocked
+ *   await validateOutboundUrl(url);    // throws SsrfBlockedError if blocked
+ *   const res = await ssrfSafeFetch(url, init);  // SSRF-safe replacement for fetch()
  */
 
 import { promises as dns } from 'node:dns';
+import http from 'node:http';
+import https from 'node:https';
+import type { LookupFunction } from 'node:net';
 
 export class SsrfBlockedError extends Error {
   constructor(public readonly reason: string) {
@@ -86,6 +97,10 @@ function isBlockedIpv6(ip: string): string | null {
  *
  * Resolves hostname to IPs via DNS and checks each against blocked ranges.
  * Throws SsrfBlockedError if the URL should not be fetched.
+ *
+ * NOTE: This function alone does NOT protect against DNS rebinding — a second DNS
+ * lookup performed by the OS during `fetch()` could resolve to a different IP after
+ * this validation passes.  Use `ssrfSafeFetch()` to get DNS-rebinding protection.
  */
 export async function validateOutboundUrl(url: string): Promise<void> {
   let parsed: URL;
@@ -147,4 +162,193 @@ export async function validateOutboundUrl(url: string): Promise<void> {
     const v6Reason = isBlockedIpv6(addr);
     if (v6Reason) throw new SsrfBlockedError(`hostname "${hostname}" resolved to blocked IPv6 ${addr}: ${v6Reason}`);
   }
+}
+
+// ─── DNS-rebinding-safe fetch ────────────────────────────────────────────────
+
+/**
+ * Resolve a hostname, validate all returned IPs against blocked ranges, and
+ * return the first safe address plus its address family.
+ *
+ * Throws SsrfBlockedError if any resolved IP is in a blocked range or if
+ * the hostname cannot be resolved.
+ */
+async function resolveAndValidateHostname(
+  hostname: string,
+): Promise<{ ip: string; family: 4 | 6 }> {
+  const addresses: Array<{ ip: string; family: 4 | 6 }> = [];
+
+  const [v4Results, v6Results] = await Promise.allSettled([
+    dns.resolve4(hostname),
+    dns.resolve6(hostname),
+  ]);
+  if (v4Results.status === 'fulfilled') {
+    for (const ip of v4Results.value) addresses.push({ ip, family: 4 });
+  }
+  if (v6Results.status === 'fulfilled') {
+    for (const ip of v6Results.value) addresses.push({ ip, family: 6 });
+  }
+
+  if (addresses.length === 0) {
+    throw new SsrfBlockedError(`hostname "${hostname}" resolved to no addresses`);
+  }
+
+  for (const { ip, family } of addresses) {
+    if (family === 4) {
+      const reason = isBlockedIpv4(ip);
+      if (reason) throw new SsrfBlockedError(`hostname "${hostname}" resolved to blocked IP ${ip}: ${reason}`);
+    } else {
+      const reason = isBlockedIpv6(ip);
+      if (reason) throw new SsrfBlockedError(`hostname "${hostname}" resolved to blocked IPv6 ${ip}: ${reason}`);
+    }
+  }
+
+  return addresses[0];
+}
+
+/**
+ * Convert an `http.IncomingMessage` to a Fetch API `Response` object.
+ */
+function incomingMessageToResponse(res: http.IncomingMessage): Promise<Response> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    res.on('data', (chunk: Buffer) => chunks.push(chunk));
+    res.on('end', () => {
+      const body = Buffer.concat(chunks);
+      const headers = new Headers();
+      for (const [key, value] of Object.entries(res.headers)) {
+        if (value !== undefined) {
+          headers.set(key, Array.isArray(value) ? value.join(', ') : value);
+        }
+      }
+      resolve(
+        new Response(body, {
+          status: res.statusCode ?? 200,
+          statusText: res.statusMessage,
+          headers,
+        }),
+      );
+    });
+    res.on('error', reject);
+  });
+}
+
+/**
+ * SSRF-safe replacement for `fetch()` with DNS-rebinding protection.
+ *
+ * How it prevents DNS rebinding:
+ *   1. Resolves the hostname via `dns.resolve4/6` (bypasses OS cache / TTL).
+ *   2. Validates every resolved IP against blocked CIDR ranges.
+ *   3. Passes a custom `lookup` callback to `https.request()` / `http.request()`
+ *      that returns only the pre-validated IP — the OS is never asked to resolve
+ *      the hostname again at TCP-connection time.
+ *
+ * Steps 1-3 happen atomically inside a single async call, so there is no window
+ * for the DNS record to change between validation and connection.
+ *
+ * Limitations / assumptions:
+ *   - Only GET / POST / PUT / PATCH / DELETE / HEAD are forwarded; exotic methods
+ *     are passed through as-is.
+ *   - Streaming request bodies are not supported; pass a `string | Buffer`.
+ *   - The caller is responsible for reading/consuming the response body.
+ *
+ * @throws SsrfBlockedError  if the URL is unsafe.
+ * @throws Error             on network or protocol errors.
+ */
+export async function ssrfSafeFetch(
+  url: string,
+  init: RequestInit = {},
+): Promise<Response> {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new SsrfBlockedError(`unparseable URL: ${url}`);
+  }
+
+  // Protocol check
+  if (!['http:', 'https:'].includes(parsed.protocol)) {
+    throw new SsrfBlockedError(`non-http(s) protocol: ${parsed.protocol}`);
+  }
+
+  const hostname = parsed.hostname;
+  const isHttps = parsed.protocol === 'https:';
+  const defaultPort = isHttps ? 443 : 80;
+  const port = parsed.port ? parseInt(parsed.port, 10) : defaultPort;
+
+  // ── Handle direct IP literals ─────────────────────────────────────────────
+  // No DNS involved → no rebinding possible; just validate and use native fetch.
+  if (/^\d+\.\d+\.\d+\.\d+$/.test(hostname)) {
+    const reason = isBlockedIpv4(hostname);
+    if (reason) throw new SsrfBlockedError(`blocked IP ${hostname}: ${reason}`);
+    return fetch(url, init);
+  }
+
+  const ipv6Bare = hostname.startsWith('[') ? hostname.slice(1, -1) : hostname;
+  if (ipv6Bare.includes(':')) {
+    const reason = isBlockedIpv6(ipv6Bare);
+    if (reason) throw new SsrfBlockedError(`blocked IPv6 ${ipv6Bare}: ${reason}`);
+    return fetch(url, init);
+  }
+
+  if (hostname === 'localhost') {
+    throw new SsrfBlockedError('blocked hostname: localhost');
+  }
+
+  // ── DNS-rebinding-resistant path ──────────────────────────────────────────
+  // Resolve + validate, then pin the connection to the validated IP.
+  const { ip: pinnedIp, family } = await resolveAndValidateHostname(hostname);
+
+  // Custom lookup that returns only the pre-validated IP, bypassing the OS
+  // resolver at TCP-connection time.
+  const pinnedLookup: LookupFunction = (_host, _opts, callback) => {
+    callback(null, pinnedIp, family);
+  };
+
+  // Build request headers
+  const reqHeaders: Record<string, string> = {};
+  if (init.headers) {
+    const h = init.headers as Record<string, string> | Headers;
+    if (h instanceof Headers) {
+      h.forEach((value, key) => { reqHeaders[key] = value; });
+    } else {
+      Object.assign(reqHeaders, h);
+    }
+  }
+
+  const requestOptions: https.RequestOptions = {
+    hostname,
+    port,
+    path: parsed.pathname + parsed.search,
+    method: (init.method as string) ?? 'GET',
+    headers: reqHeaders,
+    lookup: pinnedLookup,
+  };
+
+  return new Promise<Response>((resolve, reject) => {
+    const transport = isHttps ? https : http;
+    const req = transport.request(requestOptions, (res) => {
+      incomingMessageToResponse(res).then(resolve).catch(reject);
+    });
+
+    req.on('error', reject);
+
+    // AbortSignal support
+    if (init.signal) {
+      const signal = init.signal as AbortSignal;
+      if (signal.aborted) {
+        req.destroy();
+        return;
+      }
+      signal.addEventListener('abort', () => req.destroy(), { once: true });
+    }
+
+    // Write request body if present
+    if (init.body != null) {
+      const body = init.body as string | Buffer;
+      req.write(body);
+    }
+
+    req.end();
+  });
 }
