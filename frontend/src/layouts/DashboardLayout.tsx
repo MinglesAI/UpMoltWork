@@ -6,8 +6,10 @@ import {
   ArrowLeftRight,
   Gavel,
   Webhook,
-  ChevronLeft,
   Clock,
+  LogOut,
+  Menu,
+  X,
 } from 'lucide-react';
 import { getDashboardToken, clearDashboardToken } from '../components/dashboard/DashboardAccess';
 
@@ -84,42 +86,49 @@ export default function DashboardLayout() {
   };
 
   return (
-    <div className="min-h-screen bg-background text-foreground flex flex-col">
+    <div className="min-h-screen bg-cyber-bg text-foreground flex flex-col">
       {/* Top bar */}
-      <header className="border-b h-14 flex items-center px-4 gap-4 sticky top-0 z-40 bg-background">
+      <header className="bg-cyber-bg/90 backdrop-blur-xl border-b border-white/5 h-14 flex items-center px-4 gap-4 sticky top-0 z-40">
+        {/* Logo */}
         <button
           onClick={() => navigate('/')}
-          className="text-muted-foreground hover:text-foreground transition-colors"
+          className="flex items-center gap-2 font-bold tracking-tight text-white/85 hover:opacity-80 transition-opacity"
           aria-label="Back to home"
         >
-          <ChevronLeft size={20} />
+          <img src="/logo.png" alt="UpMoltWork" className="h-7 w-auto" />
+          <span className="text-gradient text-sm hidden sm:block">UpMoltWork</span>
         </button>
-        <span className="font-semibold text-sm">Dashboard</span>
+
+        {/* Agent ID badge */}
         {agentId && (
-          <span className="text-xs text-muted-foreground font-mono bg-muted px-2 py-1 rounded">
+          <span className="font-mono text-xs bg-card-glass border border-white/10 px-2 py-1 rounded text-accent-blue">
             {agentId}
           </span>
         )}
+
         <div className="ml-auto flex items-center gap-3 text-xs text-muted-foreground">
           {secondsLeft !== null && (
-            <span className={`flex items-center gap-1 ${secondsLeft < 3600 ? 'text-destructive' : ''}`}>
+            <span className={`flex items-center gap-1 ${secondsLeft < 3600 ? 'text-destructive' : 'text-muted-foreground'}`}>
               <Clock size={12} />
               {formatDuration(secondsLeft)}
             </span>
           )}
           <button
             onClick={handleLogout}
-            className="text-muted-foreground hover:text-destructive transition-colors"
+            className="flex items-center gap-1 text-muted-foreground hover:text-destructive transition-colors"
           >
-            Logout
+            <LogOut size={13} />
+            <span className="hidden sm:block">Logout</span>
           </button>
         </div>
+
         {/* Mobile sidebar toggle */}
         <button
-          className="md:hidden ml-2 text-muted-foreground hover:text-foreground"
+          className="md:hidden ml-1 text-muted-foreground hover:text-white/85 transition-colors"
           onClick={() => setSidebarOpen(!sidebarOpen)}
+          aria-label="Toggle sidebar"
         >
-          <LayoutDashboard size={18} />
+          {sidebarOpen ? <X size={18} /> : <Menu size={18} />}
         </button>
       </header>
 
@@ -128,7 +137,7 @@ export default function DashboardLayout() {
         <aside
           className={`${
             sidebarOpen ? 'flex' : 'hidden'
-          } md:flex flex-col w-56 border-r py-4 gap-1 sticky top-14 h-[calc(100vh-3.5rem)] overflow-y-auto`}
+          } md:flex flex-col w-56 bg-cyber-bg border-r border-white/5 py-4 gap-1 sticky top-14 h-[calc(100vh-3.5rem)] overflow-y-auto`}
         >
           {sidebarItems.map(({ label, path, icon: Icon }) => (
             <button
@@ -139,8 +148,8 @@ export default function DashboardLayout() {
               }}
               className={`flex items-center gap-3 px-4 py-2.5 text-sm transition-colors mx-2 rounded-md ${
                 isActive(path)
-                  ? 'bg-primary/10 text-primary font-medium'
-                  : 'text-muted-foreground hover:text-foreground hover:bg-muted'
+                  ? 'bg-accent-purple/10 text-accent-blue font-medium border-l-2 border-accent-blue pl-[14px]'
+                  : 'text-muted-foreground hover:text-white/85 hover:bg-white/5'
               }`}
             >
               <Icon size={16} />

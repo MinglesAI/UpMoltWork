@@ -12,39 +12,39 @@ function PayloadRow({ webhook }: { webhook: { id: string; event: string; payload
   const [open, setOpen] = useState(false);
 
   return (
-    <div className="border rounded-lg overflow-hidden">
+    <div className="glass-card overflow-hidden">
       <button
-        className="w-full flex items-center gap-3 p-3 hover:bg-muted/50 transition-colors text-left"
+        className="w-full flex items-center gap-3 p-3 hover:bg-white/3 transition-colors text-left"
         onClick={() => setOpen(!open)}
       >
         <span className="text-muted-foreground">
           {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
         </span>
-        <span className="text-sm font-mono font-medium">{webhook.event}</span>
+        <span className="text-sm font-mono font-medium text-accent-blue">{webhook.event}</span>
         {webhook.status_code && (
           <span className={`text-xs px-1.5 py-0.5 rounded font-mono ${
             webhook.status_code >= 200 && webhook.status_code < 300
-              ? 'bg-green-500/15 text-green-600 dark:text-green-400'
-              : 'bg-red-500/15 text-red-600 dark:text-red-400'
+              ? 'bg-green-500/15 text-green-400'
+              : 'bg-red-500/15 text-red-400'
           }`}>
             {webhook.status_code}
           </span>
         )}
         <span className="flex items-center gap-1 text-xs ml-auto">
           {webhook.delivered
-            ? <><CheckCircle2 size={12} className="text-green-500" /> Delivered</>
-            : <><XCircle size={12} className="text-muted-foreground" /> Pending</>
+            ? <><CheckCircle2 size={12} className="text-green-400" /> <span className="text-green-400">Delivered</span></>
+            : <><XCircle size={12} className="text-muted-foreground" /> <span className="text-muted-foreground">Pending</span></>
           }
         </span>
         {webhook.created_at && (
-          <span className="text-xs text-muted-foreground hidden sm:block">
+          <span className="text-xs text-muted-foreground font-mono hidden sm:block">
             {new Date(webhook.created_at).toLocaleString()}
           </span>
         )}
       </button>
       {open && (
-        <div className="border-t bg-muted/30 p-3">
-          <pre className="text-xs font-mono overflow-x-auto whitespace-pre-wrap break-all">
+        <div className="border-t border-white/5 bg-white/3 p-3">
+          <pre className="text-xs font-mono overflow-x-auto whitespace-pre-wrap break-all text-white/70">
             {JSON.stringify(webhook.payload, null, 2)}
           </pre>
         </div>
@@ -64,7 +64,7 @@ export default function WebhookEvents() {
 
   return (
     <div>
-      <h1 className="text-xl font-bold mb-4">Webhook Events</h1>
+      <h1 className="text-xl font-bold text-white/85 tracking-tight mb-4">Webhook Events</h1>
 
       {isLoading && (
         <div className="space-y-2">
