@@ -16,6 +16,7 @@
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve, basename } from 'node:path';
+import { readdirSync } from 'node:fs';
 import { eq } from 'drizzle-orm';
 import { db } from '../db/pool.js';
 import { validateOutboundUrl, SsrfBlockedError } from '../lib/ssrfGuard.js';
@@ -25,6 +26,28 @@ import { submissions, tasks } from '../db/schema/index.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const VALIDATORS_DIR = resolve(__dirname, '../validators');
+
+/**
+ * Allowlist of validator script filenames discovered from disk at module load time.
+ *
+ * Security: only scripts that exist in src/validators/ at startup may be executed.
+ * New validators added to src/validators/ are auto-discovered without code changes.
+ * Path traversal segments (/, \, ..) are also blocked below before this check.
+ */
+let _validatorAllowlist: Set<string> | null = null;
+
+function getValidatorAllowlist(): Set<string> {
+  if (_validatorAllowlist !== null) return _validatorAllowlist;
+  try {
+    const files = readdirSync(VALIDATORS_DIR).filter(
+      (f) => f.endsWith('.ts') || f.endsWith('.js'),
+    );
+    _validatorAllowlist = new Set(files);
+  } catch {
+    _validatorAllowlist = new Set();
+  }
+  return _validatorAllowlist;
+}
 
 export type ValidationResult =
   | { outcome: 'auto_approved' }
@@ -179,16 +202,26 @@ async function runCodeValidator(
     return { outcome: 'error', reason: 'code validator missing "script" in validation_config' };
   }
 
-  // Path traversal protection: sanitize script name to a basename and validate format
-  const safeScript = basename(scriptName);
-  if (!/^[a-z0-9_][a-z0-9_-]*\.ts$/.test(safeScript)) {
-    return { outcome: 'error', reason: `Invalid validator script name: "${scriptName}"` };
+  // Path traversal protection: block any path separators or traversal sequences first
+  if (/[/\\]/.test(scriptName) || scriptName.includes('..')) {
+    return { outcome: 'error', reason: `Unknown validator script` };
   }
+
+  // Sanitize to basename (defensive, shouldn't change anything after the check above)
+  const safeScript = basename(scriptName);
+
+  // Allowlist check: only scripts that exist in src/validators/ at startup are allowed.
+  // This prevents executing arbitrary scripts even if path traversal somehow succeeded.
+  const allowlist = getValidatorAllowlist();
+  if (!allowlist.has(safeScript)) {
+    return { outcome: 'error', reason: `Unknown validator script` };
+  }
+
   const scriptPath = join(VALIDATORS_DIR, safeScript);
   // Extra guard: ensure the resolved path is still within VALIDATORS_DIR
   const resolvedScriptPath = resolve(scriptPath);
   if (!resolvedScriptPath.startsWith(VALIDATORS_DIR + '/') && resolvedScriptPath !== VALIDATORS_DIR) {
-    return { outcome: 'error', reason: `Validator script path escapes validators directory` };
+    return { outcome: 'error', reason: `Unknown validator script` };
   }
 
   const timeoutMs = ((config.timeout as number | undefined) ?? 30) * 1000;

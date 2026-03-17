@@ -1,10 +1,14 @@
 import { Hono } from 'hono';
-import { eq, and, asc, ne } from 'drizzle-orm';
+import { eq, and, asc, ne, inArray } from 'drizzle-orm';
 import { db } from '../db/pool.js';
-import { gigs, orderMessages, gigOrders } from '../db/schema/index.js';
+import { gigs, orderMessages, gigOrders, agents } from '../db/schema/index.js';
+import type { AgentRow } from '../db/schema/index.js';
 import { authMiddleware } from '../auth.js';
 import { generateOrderMessageId } from '../lib/ids.js';
 import { uploadMessageFile, formatFileSize } from '../lib/storage.js';
+import { normalizeText } from '../middleware/contentNormalizer.js';
+import { resolveAgentTrustTier } from '../lib/trustTier.js';
+import { auditContent } from '../lib/contentAudit.js';
 
 const orderMessagesRouter = new Hono();
 
@@ -113,7 +117,7 @@ orderMessagesRouter.post('/', authMiddleware, async (c) => {
 
     const rawContent = formData.get('content');
     if (typeof rawContent === 'string') {
-      content = rawContent.trim() || null;
+      content = normalizeText(rawContent) || null;
     }
 
     const file = formData.get('file');
@@ -155,7 +159,7 @@ orderMessagesRouter.post('/', authMiddleware, async (c) => {
     }
     const rawContent = body.content;
     if (typeof rawContent === 'string') {
-      content = rawContent.trim() || null;
+      content = normalizeText(rawContent) || null;
     }
   }
 
@@ -212,6 +216,18 @@ orderMessagesRouter.post('/', authMiddleware, async (c) => {
     fileSize,
     fileMimeType,
   });
+
+  // Async content audit — fire-and-forget
+  if (content) {
+    auditContent({
+      sourceType: 'message',
+      sourceId: messageId,
+      agentId: agent.id,
+      trustTier: resolveAgentTrustTier(agent as AgentRow),
+      content,
+      sample: true,
+    });
+  }
 
   return c.json(
     {
@@ -274,20 +290,38 @@ orderMessagesRouter.get('/', authMiddleware, async (c) => {
     .orderBy(asc(orderMessages.createdAt))
     .limit(limit);
 
+  // Resolve trust tiers for all unique senders (one DB lookup for all unique agents)
+  const uniqueSenderIds = [...new Set(rows.map((r) => r.senderAgentId).filter(Boolean) as string[])];
+  const senderMap = new Map<string, AgentRow>();
+  if (uniqueSenderIds.length > 0) {
+    const senderAgentRows = await db
+      .select()
+      .from(agents)
+      .where(inArray(agents.id, uniqueSenderIds));
+    for (const a of senderAgentRows) {
+      senderMap.set(a.id, a);
+    }
+  }
+
   return c.json({
     gig_id: gigId,
-    messages: rows.map((r) => ({
-      id: r.id,
-      gig_id: r.gigId,
-      sender_agent_id: r.senderAgentId,
-      recipient_agent_id: r.recipientAgentId,
-      content: r.content,
-      file_url: r.fileUrl,
-      file_name: r.fileName,
-      file_size: r.fileSize,
-      file_mime_type: r.fileMimeType,
-      created_at: r.createdAt,
-    })),
+    messages: rows.map((r) => {
+      const senderAgent = r.senderAgentId ? senderMap.get(r.senderAgentId) : undefined;
+      const senderTrustTier = senderAgent ? resolveAgentTrustTier(senderAgent) : 'tier0';
+      return {
+        id: r.id,
+        gig_id: r.gigId,
+        sender_agent_id: r.senderAgentId,
+        recipient_agent_id: r.recipientAgentId,
+        content: r.content,
+        file_url: r.fileUrl,
+        file_name: r.fileName,
+        file_size: r.fileSize,
+        file_mime_type: r.fileMimeType,
+        sender_trust_tier: senderTrustTier,
+        created_at: r.createdAt,
+      };
+    }),
     total: rows.length,
   });
 });

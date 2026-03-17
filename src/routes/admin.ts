@@ -7,7 +7,7 @@
 
 import { Hono } from 'hono';
 import crypto from 'node:crypto';
-import { desc, eq, and, sql, count, sum } from 'drizzle-orm';
+import { desc, eq, and, sql, count, sum, gte, lt } from 'drizzle-orm';
 import { db, dbDirect } from '../db/pool.js';
 import {
   agents,
@@ -16,6 +16,7 @@ import {
   x402Payments,
   gigs,
   gigOrders,
+  contentAuditLog,
 } from '../db/schema/index.js';
 import { runDailyEmission } from '../services/emissionService.js';
 import { releaseEscrowForOrder, refundEscrowForOrder } from '../lib/transfer.js';
@@ -677,4 +678,134 @@ adminRouter.post('/gig-orders/:orderId/resolve-dispute', async (c) => {
       cancelled_at: txResult.cancelledAt?.toISOString() ?? null,
     }, 200);
   }
+});
+
+// ---------------------------------------------------------------------------
+// GET /v1/admin/content-audit
+// Paginated content audit log with optional filters.
+//
+// Query params:
+//   agent_id    — filter by agent
+//   severity    — 'info' | 'warning' | 'critical'
+//   source_type — 'task' | 'bid' | 'submission' | 'message' | 'gig_delivery'
+//   since       — ISO date string (inclusive)
+//   page        — 1-based page number (default 1)
+//   limit       — results per page (default 50, max 100)
+// ---------------------------------------------------------------------------
+adminRouter.get('/content-audit', async (c) => {
+  const query = c.req.query() as Record<string, string>;
+  const { page, limit, offset } = parsePagination(query);
+
+  const conditions = [];
+  if (query.agent_id) conditions.push(eq(contentAuditLog.agentId, query.agent_id));
+  if (query.severity) conditions.push(eq(contentAuditLog.severity, query.severity));
+  if (query.source_type) conditions.push(eq(contentAuditLog.sourceType, query.source_type));
+  if (query.since) {
+    const sinceDate = new Date(query.since);
+    if (!isNaN(sinceDate.getTime())) {
+      conditions.push(gte(contentAuditLog.createdAt, sinceDate));
+    }
+  }
+
+  const whereClause = conditions.length ? and(...conditions) : undefined;
+
+  const rows = whereClause
+    ? await db
+        .select()
+        .from(contentAuditLog)
+        .where(whereClause)
+        .orderBy(desc(contentAuditLog.createdAt))
+        .limit(limit)
+        .offset(offset)
+    : await db
+        .select()
+        .from(contentAuditLog)
+        .orderBy(desc(contentAuditLog.createdAt))
+        .limit(limit)
+        .offset(offset);
+
+  return c.json({
+    audit_log: rows.map((r) => ({
+      id: r.id,
+      event_type: r.eventType,
+      source_type: r.sourceType,
+      source_id: r.sourceId,
+      agent_id: r.agentId,
+      trust_tier: r.trustTier,
+      pattern: r.pattern,
+      content_hash: r.contentHash,
+      severity: r.severity,
+      created_at: r.createdAt?.toISOString(),
+    })),
+    page,
+    limit,
+    offset,
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GET /v1/admin/content-audit/alerts
+// Returns agents exceeding alert thresholds:
+//   - >10 'critical' events in the last 1 hour
+//   - >50 'warning' events in the last 24 hours
+//
+// Auto-suspend is NOT performed automatically — this endpoint surfaces agents
+// that require manual review. The threshold-based suspend flow should be
+// implemented as a separate manual operation after human review of the audit log.
+// ---------------------------------------------------------------------------
+adminRouter.get('/content-audit/alerts', async (c) => {
+  const now = new Date();
+  const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
+  const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+
+  // Agents with >10 critical events in last 1 hour
+  const criticalAlerts = await db
+    .select({
+      agentId: contentAuditLog.agentId,
+      count: count(),
+    })
+    .from(contentAuditLog)
+    .where(
+      and(
+        eq(contentAuditLog.severity, 'critical'),
+        gte(contentAuditLog.createdAt, oneHourAgo),
+      ),
+    )
+    .groupBy(contentAuditLog.agentId)
+    .having(sql`count(*) > 10`);
+
+  // Agents with >50 warning events in last 24 hours
+  const warningAlerts = await db
+    .select({
+      agentId: contentAuditLog.agentId,
+      count: count(),
+    })
+    .from(contentAuditLog)
+    .where(
+      and(
+        eq(contentAuditLog.severity, 'warning'),
+        gte(contentAuditLog.createdAt, oneDayAgo),
+      ),
+    )
+    .groupBy(contentAuditLog.agentId)
+    .having(sql`count(*) > 50`);
+
+  return c.json({
+    /**
+     * NOTE: Automatic suspension is out of scope.
+     * These agents should be reviewed manually before any action is taken.
+     * Suspend via PATCH /v1/admin/agents/:id { status: 'suspended' } after review.
+     */
+    critical_threshold: {
+      description: '>10 critical events in the last 1 hour',
+      window_start: oneHourAgo.toISOString(),
+      agents: criticalAlerts.map((a) => ({ agent_id: a.agentId, count: Number(a.count) })),
+    },
+    warning_threshold: {
+      description: '>50 warning events in the last 24 hours',
+      window_start: oneDayAgo.toISOString(),
+      agents: warningAlerts.map((a) => ({ agent_id: a.agentId, count: Number(a.count) })),
+    },
+    generated_at: now.toISOString(),
+  });
 });
