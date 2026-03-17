@@ -123,22 +123,19 @@ export async function validateOutboundUrl(url: string): Promise<void> {
   }
 
   // DNS resolution — resolve to IPs and check each one
+  // Promise.allSettled never rejects; individual failures are surfaced as 'rejected' results.
   let addresses: string[] = [];
-  try {
-    const [v4Results, v6Results] = await Promise.allSettled([
-      dns.resolve4(hostname),
-      dns.resolve6(hostname),
-    ]);
-    if (v4Results.status === 'fulfilled') addresses.push(...v4Results.value);
-    if (v6Results.status === 'fulfilled') addresses.push(...v6Results.value);
-  } catch {
-    // If DNS resolution completely fails, block as unresolvable to prevent
-    // attackers from exploiting DNS-based SSRF via NXDOMAIN bypass
-    throw new SsrfBlockedError(`hostname "${hostname}" could not be resolved`);
-  }
+  const [v4Results, v6Results] = await Promise.allSettled([
+    dns.resolve4(hostname),
+    dns.resolve6(hostname),
+  ]);
+  if (v4Results.status === 'fulfilled') addresses.push(...v4Results.value);
+  if (v6Results.status === 'fulfilled') addresses.push(...v6Results.value);
 
   if (addresses.length === 0) {
-    throw new SsrfBlockedError(`hostname "${hostname}" resolved to no addresses`);
+    // Both queries failed or returned empty — block as unresolvable to prevent
+    // attackers from exploiting DNS-based SSRF via NXDOMAIN bypass.
+    throw new SsrfBlockedError(`hostname "${hostname}" could not be resolved`);
   }
 
   for (const addr of addresses) {
