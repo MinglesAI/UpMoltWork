@@ -1,56 +1,49 @@
-# CI: PR — сборка обоих образов на раннере.
-# CD: push в main — деплой на прод. Плюс ручной запуск для отката.
+# Deploy to production on push to main. Manual runs are the rollback path.
 #
-# Устроено так же, как в MinglesAI/LeadMonitor: код кладётся НА СЕРВЕР с
-# раннера по rsync, а не тянется git'ом. Серверу не нужен ни доступ к GitHub,
-# ни ключ, ни токен, а на диске оказывается ровно тот коммит, который собрал CI.
+# No pull_request trigger on purpose: this repository is public, and a workflow
+# that runs on forked PRs is a way to hand a stranger the deploy step. Build and
+# test locally, or add a separate PR workflow that touches nothing outside the
+# runner.
 #
-# Базовый `.env` живёт НА СЕРВЕРЕ и в репозиторий не попадает: там ключи
-# Supabase и строки подключения к базе. Деплой сознательно падает, если файла
-# нет, — это лучше, чем поднять контейнер, который не может ходить в базу.
+# The runner ships the checked-out tree to the server over rsync instead of the
+# server pulling from GitHub. The server needs no GitHub access, no deploy key
+# and no token, and what lands on disk is exactly the commit CI built.
 #
-# Настройки репозитория:
-#   Secrets:   DEPLOY_SSH_KEY   — приватный ключ пользователя deployer
-#   Variables: DEPLOY_SSH_HOST  — 65.109.128.79
-#              DEPLOY_SSH_USER  — deployer
-#              DEPLOY_PATH      — /opt/UpMoltWork
+# The base `.env` lives ON THE SERVER and never enters this repository: it holds
+# the Supabase keys and database URLs. The deploy fails loudly when it is
+# missing, which beats starting an API that cannot reach its database.
+#
+# Repository settings:
+#   Secrets:   DEPLOY_SSH_KEY   — private key of the `deployer` user
+#   Variables: DEPLOY_SSH_HOST  — production host
+#              DEPLOY_SSH_USER  — defaults to `deployer`
+#              DEPLOY_PATH      — defaults to /opt/UpMoltWork
 
-name: CI/CD
+name: Deploy
 
 on:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
   workflow_dispatch:
 
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
 jobs:
-  build:
-    name: Сборка
-    runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
-    steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - name: Собрать API
-        run: docker build -f Dockerfile.api -t upmoltwork-api:ci .
-      - name: Собрать фронтенд
-        run: docker build -f frontend/Dockerfile -t upmoltwork-frontend:ci ./frontend
-
   deploy:
-    name: Развернуть
+    name: Deploy to production
     runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request'
     steps:
       - uses: actions/checkout@v4
 
-      - name: Ключ SSH
+      - name: Set up SSH key
         run: |
           install -m 700 -d ~/.ssh
           echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
 
-      - name: Развернуть на сервере
+      - name: Ship the tree and bring the stack up
         env:
           SSH_HOST: ${{ vars.DEPLOY_SSH_HOST }}
           SSH_USER: ${{ vars.DEPLOY_SSH_USER }}
@@ -64,8 +57,8 @@ jobs:
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
             "${USER}@${SSH_HOST}" "mkdir -p '${PATH_ON_SERVER}'"
 
-          # --delete чистит удалённые из репозитория файлы, поэтому исключения
-          # обязаны быть точными: .env — это ключи Supabase.
+          # --delete removes files dropped from the repository, so the excludes
+          # have to be exact: .env holds the Supabase credentials.
           rsync -az --delete \
             --exclude='.git/' \
             --exclude='.env' \
@@ -77,13 +70,14 @@ jobs:
           set -e
           cd '${PATH_ON_SERVER}'
           if [ ! -f .env ]; then
-            echo "НЕТ .env в ${PATH_ON_SERVER} — положите его на сервер вручную" >&2
+            echo "No .env in ${PATH_ON_SERVER} — put it on the server by hand" >&2
             exit 1
           fi
           echo '${{ github.sha }}' > DEPLOYED_SHA
 
-          # Сеть с IPv6: прямое подключение к Supabase резолвится только по
-          # IPv6, без неё API не достучится до базы. Создаётся один раз.
+          # IPv6-enabled network: a direct Supabase connection resolves over
+          # IPv6 only, so without it the API cannot reach the database.
+          # Created once, then reused.
           docker network inspect upmolt-ipv6 >/dev/null 2>&1 || docker network create --ipv6 upmolt-ipv6
 
           docker compose build
@@ -94,15 +88,17 @@ jobs:
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
             "${USER}@${SSH_HOST}" bash -s <<< "$REMOTE"
 
-      - name: Проверить, что поднялось
+      - name: Check both hosts answer
         run: |
           for url in https://upmoltwork.mingles.ai https://api.upmoltwork.mingles.ai; do
             ok=""
             for i in $(seq 1 12); do
               code=$(curl -s -o /dev/null -w '%{http_code}' "$url" || true)
+              # 401/403/404 still prove the container is up and routed; only a
+              # connection failure or a 5xx means the deploy did not land.
               case "$code" in 2*|3*|401|403|404) ok="$code"; break;; esac
               sleep 5
             done
-            if [ -n "$ok" ]; then echo "$url отвечает ($ok)"; else
-              echo "$url не ответил за минуту (последний код: $code)" >&2; exit 1; fi
+            if [ -n "$ok" ]; then echo "$url answered ($ok)"; else
+              echo "$url did not answer within a minute (last code: $code)" >&2; exit 1; fi
           done
