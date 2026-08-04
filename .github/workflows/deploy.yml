@@ -1,0 +1,108 @@
+# CI: PR — сборка обоих образов на раннере.
+# CD: push в main — деплой на прод. Плюс ручной запуск для отката.
+#
+# Устроено так же, как в MinglesAI/LeadMonitor: код кладётся НА СЕРВЕР с
+# раннера по rsync, а не тянется git'ом. Серверу не нужен ни доступ к GitHub,
+# ни ключ, ни токен, а на диске оказывается ровно тот коммит, который собрал CI.
+#
+# Базовый `.env` живёт НА СЕРВЕРЕ и в репозиторий не попадает: там ключи
+# Supabase и строки подключения к базе. Деплой сознательно падает, если файла
+# нет, — это лучше, чем поднять контейнер, который не может ходить в базу.
+#
+# Настройки репозитория:
+#   Secrets:   DEPLOY_SSH_KEY   — приватный ключ пользователя deployer
+#   Variables: DEPLOY_SSH_HOST  — 65.109.128.79
+#              DEPLOY_SSH_USER  — deployer
+#              DEPLOY_PATH      — /opt/UpMoltWork
+
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Сборка
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Собрать API
+        run: docker build -f Dockerfile.api -t upmoltwork-api:ci .
+      - name: Собрать фронтенд
+        run: docker build -f frontend/Dockerfile -t upmoltwork-frontend:ci ./frontend
+
+  deploy:
+    name: Развернуть
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ключ SSH
+        run: |
+          install -m 700 -d ~/.ssh
+          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+
+      - name: Развернуть на сервере
+        env:
+          SSH_HOST: ${{ vars.DEPLOY_SSH_HOST }}
+          SSH_USER: ${{ vars.DEPLOY_SSH_USER }}
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+        run: |
+          set -e
+          USER="${SSH_USER:-deployer}"
+          PATH_ON_SERVER="${DEPLOY_PATH:-/opt/UpMoltWork}"
+          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
+            "${USER}@${SSH_HOST}" "mkdir -p '${PATH_ON_SERVER}'"
+
+          # --delete чистит удалённые из репозитория файлы, поэтому исключения
+          # обязаны быть точными: .env — это ключи Supabase.
+          rsync -az --delete \
+            --exclude='.git/' \
+            --exclude='.env' \
+            --exclude='node_modules/' \
+            -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new" \
+            ./ "${USER}@${SSH_HOST}:${PATH_ON_SERVER}/"
+
+          REMOTE=$(cat <<REMOTE_EOF
+          set -e
+          cd '${PATH_ON_SERVER}'
+          if [ ! -f .env ]; then
+            echo "НЕТ .env в ${PATH_ON_SERVER} — положите его на сервер вручную" >&2
+            exit 1
+          fi
+          echo '${{ github.sha }}' > DEPLOYED_SHA
+
+          # Сеть с IPv6: прямое подключение к Supabase резолвится только по
+          # IPv6, без неё API не достучится до базы. Создаётся один раз.
+          docker network inspect upmolt-ipv6 >/dev/null 2>&1 || docker network create --ipv6 upmolt-ipv6
+
+          docker compose build
+          docker compose up -d --remove-orphans
+          docker compose ps
+          REMOTE_EOF
+          )
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
+            "${USER}@${SSH_HOST}" bash -s <<< "$REMOTE"
+
+      - name: Проверить, что поднялось
+        run: |
+          for url in https://upmoltwork.mingles.ai https://api.upmoltwork.mingles.ai; do
+            ok=""
+            for i in $(seq 1 12); do
+              code=$(curl -s -o /dev/null -w '%{http_code}' "$url" || true)
+              case "$code" in 2*|3*|401|403|404) ok="$code"; break;; esac
+              sleep 5
+            done
+            if [ -n "$ok" ]; then echo "$url отвечает ($ok)"; else
+              echo "$url не ответил за минуту (последний код: $code)" >&2; exit 1; fi
+          done
